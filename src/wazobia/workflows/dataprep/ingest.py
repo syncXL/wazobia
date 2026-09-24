@@ -7,13 +7,12 @@ import hashlib
 import polars as pl
 import pyarrow as pa
 import os
+import shutil
 import ray
-import sys
 
-from datasets import load_dataset, Audio, Dataset
-from huggingface_hub import HfApi, hf_hub_download
+from datasets import load_dataset, Audio
+from huggingface_hub import HfApi
 from functools import partial
-from math import floor
 from pathlib import Path
 from typing import Sequence
 from wazobia import config
@@ -25,7 +24,33 @@ from wazobia.file_manager import manager
 def remove_files(files: Sequence[str | Path]) -> None:
     """Remove the given files, ignoring files that do not exist."""
     for file in files:
-        Path(file).unlink()
+        Path(file).unlink(missing_ok=True)
+
+def _language_partition(lang: str) -> str:
+    return lang.removesuffix("_ng")
+
+def _shard_id(filename: str) -> str:
+    return hashlib.sha256(filename.encode("utf-8")).hexdigest()[:20]
+
+def _unique_parquet_names(files: list[Path], shard_id: str) -> list[Path]:
+    renamed = []
+    for index, file in enumerate(sorted(files)):
+        target = file.with_name(f"{shard_id}-{index:05d}.parquet")
+        file.rename(target)
+        renamed.append(target)
+    return renamed
+
+def _staging_root(file: Path) -> Path | None:
+    return next((candidate for candidate in [file.parent, *file.parents] if candidate.parent.name == "staging"), None)
+
+def _ray_workers() -> int:
+    return max(1, int(os.environ.get("WAZOBIA_RAY_WORKERS", "1")))
+
+def _ray_batch_size() -> int:
+    return max(1, int(os.environ.get("WAZOBIA_RAY_BATCH_SIZE", "16")))
+
+def _shuffle_buffer_size() -> int:
+    return max(1, int(os.environ.get("WAZOBIA_SHUFFLE_BUFFER_SIZE", "256")))
 
 def assign_split(file_path: str, weights=(0.7, 0.1, 0.2)) -> str:
         # deterministic: same file always gets same split, across reruns
@@ -59,6 +84,76 @@ class DataPrepCLI:
         settings = config.settings
         self.bucket = manager.HFBucket(settings.hf_bucket, settings.hf_token)
 
+    def _persist_metrics(self, accumulator: metrics.MetricsAccumulator, output_dir: str) -> None:
+        failed = self.bucket.upload([accumulator.state_path], local_dir=output_dir)
+        if failed:
+            raise ValueError(f"Failed to upload metrics checkpoint {failed}")
+
+    def _resume_completed_shard(
+        self,
+        entity: dict,
+        corpus_ledger: ledger.CorpusLedger,
+        accumulator: metrics.MetricsAccumulator,
+        output_dir: str,
+    ) -> bool:
+        parquet_files = [
+            Path(p).resolve()
+            for p in entity.get("local_dir", [])
+            if Path(p).suffix == ".parquet"
+        ]
+        if not parquet_files or not all(p.is_file() for p in parquet_files):
+            corpus_ledger.mark_pending(entity["filename"])
+            return False
+
+        stage_root = _staging_root(parquet_files[0])
+        if stage_root is not None and all(_staging_root(p) == stage_root for p in parquet_files):
+            upload_root = stage_root
+        else:
+            # Older ledger entries stored shard files under output_dir/data and
+            # included the ledger JSON in local_dir. Resume those in place.
+            upload_root = (Path(output_dir) / "data").resolve()
+            if not all(p.is_relative_to(upload_root) for p in parquet_files):
+                corpus_ledger.mark_pending(entity["filename"])
+                return False
+
+        partition_values = {
+            key: value
+            for part in parquet_files[0].parts
+            if "=" in part
+            for key, value in [part.split("=", 1)]
+        }
+        if not all(key in partition_values for key in ("corpus", "split", "language")):
+            corpus_ledger.mark_pending(entity["filename"])
+            return False
+        accumulator.update_shard_from_local(
+            parquet_files,
+            partition_values["corpus"],
+            partition_values["split"],
+            partition_values["language"],
+            identity=entity["filename"],
+        )
+        self._persist_metrics(accumulator, output_dir)
+
+        failed = self.bucket.upload(parquet_files, local_dir=str(upload_root))
+        if failed:
+            raise ValueError(f"Failed to resume upload {failed}")
+        corpus_ledger.mark_uploaded(entity["filename"])
+        failed = self.bucket.upload([corpus_ledger.repo.path], local_dir=output_dir)
+        if failed:
+            raise ValueError(f"Failed to upload ledger {failed}")
+
+        if stage_root is not None:
+            shutil.rmtree(stage_root, ignore_errors=True)
+        else:
+            remove_files(parquet_files)
+        return True
+
+    @staticmethod
+    def _resolve_accumulator(output_dir: str, accumulator: metrics.MetricsAccumulator | None) -> metrics.MetricsAccumulator:
+        if accumulator is not None:
+            return accumulator
+        return metrics.MetricsAccumulator(str(Path(output_dir) / "metrics" / "metrics.pkl"))
+
     @staticmethod
     def check_versions():
         """Check and display versions of critical packages used in data preparation.
@@ -87,15 +182,15 @@ class DataPrepCLI:
                 print("⚠️  Warning: ray version < 2.49 may have performance issues")
 
     def _process_batches(self, ds, lang, split, corpus, output_dir,audio_column: str = "audio", remove_numbers=False):
+        output_path = Path(output_dir).resolve()
         ray_ds_stream_ = ray.data.from_huggingface(ds)
         
-        num_cpus = max(floor((os.cpu_count() or 1) / 4), 1)
         ray_ds_stream_ = ray_ds_stream_.map_batches(
             text_tools_corpus.TextProcessor,
             fn_constructor_kwargs={"lang" : lang, "remove_numbers" : remove_numbers},
-            batch_size=100,
+            batch_size=_ray_batch_size(),
             batch_format="pyarrow",
-            concurrency=num_cpus
+            compute=ray.data.ActorPoolStrategy(size=_ray_workers()),
         )
 
         ray_ds_stream_ = ray_ds_stream_.map_batches(
@@ -103,9 +198,9 @@ class DataPrepCLI:
             fn_constructor_kwargs={
                 "audio_column" : audio_column,
             },
-            batch_size=100,
+            batch_size=_ray_batch_size(),
             batch_format="pyarrow",
-            concurrency=num_cpus
+            compute=ray.data.ActorPoolStrategy(size=_ray_workers()),
         )
 
         ray_ds_stream_ = ray_ds_stream_.map_batches(
@@ -115,18 +210,19 @@ class DataPrepCLI:
                 corpus=corpus,
                 audio_col=audio_column
             ),
-            batch_size=100,
-            batch_format="pyarrow"
+            batch_size=_ray_batch_size(),
+            batch_format="pyarrow",
+            compute=ray.data.TaskPoolStrategy(size=1),
         )
 
         ray_ds_stream_.write_parquet(
-            output_dir,
+            str(output_path),
             partition_cols=["corpus", "split", "language"],
             min_rows_per_file=10_000,
             row_group_size=100
         )
 
-        return f"{output_dir}/corpus={corpus}/split={split}/language={lang.rstrip("_ng")}"
+        return output_path
 
     def _ingest_corpus_internal(
         self,
@@ -138,38 +234,59 @@ class DataPrepCLI:
         text_col : str,
         accx: metrics.MetricsAccumulator,
         lang: str | None = None,
-        split_map : dict[str, str] = dict(),
-        lang_map : dict[str,str] = dict(),
+        split_map : dict[str, str] | None = None,
+        lang_map : dict[str,str] | None = None,
         remove_numbers : bool = False
     ):
-        for entity in corpus_ledger.claim():
+        split_map = split_map or {}
+        lang_map = lang_map or {}
+        entities = corpus_ledger.claim()
+        if add_lang_config:
+            entities = [e for e in entities if e["filename"].split("/")[-2] == lang]
+        for entity in entities:
+            if entity["status"] == "completed":
+                if self._resume_completed_shard(entity, corpus_ledger, accx, output_dir):
+                    continue
             split = entity["filename"].split("/")[-1]
             if not add_lang_config:
                 corpus_hf = load_dataset(repo_id, split=split, streaming=True)
             else:
                 corpus_hf = load_dataset(repo_id, lang,split=split, streaming=True)
 
-            corpus_hf = corpus_hf.shuffle(seed=42, buffer_size=10_000)
+            corpus_hf = corpus_hf.shuffle(seed=42, buffer_size=_shuffle_buffer_size())
             corpus_hf = corpus_hf.cast_column("audio", Audio(decode=False, sampling_rate=16000))
-            corpus_hf = corpus_hf.rename_column({text_col : "transcript"})
+            if text_col != "transcript":
+                corpus_hf = corpus_hf.rename_column(text_col, "transcript")
             
             
-            corpus_lang = lang or ""
-            hive_dir = self._process_batches(corpus_hf, lang_map.get(corpus_lang, corpus_lang), split_map.get(split, split), corpus_name, output_dir + "/data", remove_numbers=remove_numbers)
-            files = list(Path(hive_dir).glob("*.parquet"))
+            corpus_lang = lang_map.get(lang or "", lang or "")
+            output_split = split_map.get(split, split)
+            shard_dir = Path(output_dir) / "staging" / _shard_id(entity["filename"])
+            if shard_dir.exists():
+                shutil.rmtree(shard_dir)
+            shard_dir = shard_dir.resolve()
+            self._process_batches(corpus_hf, corpus_lang, output_split, corpus_name, str(shard_dir), remove_numbers=remove_numbers)
+            files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), _shard_id(entity["filename"]))
+            if not files:
+                raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
 
-            for file in files:
-                accx.update_from_local(str(file), corpus_name, split_map.get(split,split), lang_map.get(lang,lang))
+            accx.update_shard_from_local(
+                files, corpus_name, output_split, _language_partition(corpus_lang),
+                identity=entity["filename"],
+            )
+            self._persist_metrics(accx, output_dir)
 
-            files.append(corpus_ledger.repo.path)
             corpus_ledger.mark_completed(entity["filename"], files)
-            failed = self.bucket.upload(files,local_dir=output_dir)
+            failed = self.bucket.upload(files, local_dir=str(shard_dir))
 
             if len(failed) != 0:
                 raise ValueError(f"Failed to upload {failed}")
 
             corpus_ledger.mark_uploaded(entity["filename"])
-            remove_files(files)
+            failed = self.bucket.upload([corpus_ledger.repo.path], local_dir=output_dir)
+            if failed:
+                raise ValueError(f"Failed to upload ledger {failed}")
+            shutil.rmtree(shard_dir, ignore_errors=True)
 
     def _ingest_naijavoices_internal(self, output_dir: str, accx: metrics.MetricsAccumulator , lang_subset: list[str] |None = None):
         repo_id = "naijavoices/naijavoices-dataset"
@@ -195,26 +312,28 @@ class DataPrepCLI:
                 corpus_ledger.register_file(f"{sp}^{fpath}" )
 
         for entity in corpus_ledger.claim():
+            if entity["status"] == "completed":
+                if self._resume_completed_shard(entity, corpus_ledger, accx, output_dir):
+                    continue
             split, fp = entity["filename"].split("^")
             lang = fp.split("-")[0]
             lang = lang_map.get(lang) or lang
-            download_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=fp,
-                repo_type="dataset"
+            parquet_url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{fp}"
+            fp_hf = load_dataset(
+                "parquet",
+                data_files=parquet_url,
+                split="train",
+                streaming=True,
             )
-            fp_hf = Dataset.from_parquet(download_path)
-            fp_hf = fp_hf.rename_columns({"text" : "transcript"})
+            fp_hf = fp_hf.rename_column("text", "transcript")
             fp_hf = fp_hf.cast_column("audio", Audio(decode=False, sampling_rate=16_000))
-            num_cpus = max(floor((os.cpu_count() or 1) / 4), 1)
-
             ray_ds = ray.data.from_huggingface(fp_hf)            
             ray_ds = ray_ds.map_batches(
                 text_tools_corpus.TextProcessor,
                 fn_constructor_kwargs={"lang" : lang, "remove_numbers" : False},
-                batch_size=100,
+                batch_size=_ray_batch_size(),
                 batch_format="pyarrow",
-                concurrency=num_cpus
+                compute=ray.data.ActorPoolStrategy(size=_ray_workers()),
             )
             
             ray_ds = ray_ds.map_batches(
@@ -222,9 +341,9 @@ class DataPrepCLI:
                 fn_constructor_kwargs={
                     "audio_column" : "audio",
                 },
-                batch_size=100,
+                batch_size=_ray_batch_size(),
                 batch_format="pyarrow",
-                concurrency=num_cpus
+                compute=ray.data.ActorPoolStrategy(size=_ray_workers()),
             )
             
             ray_ds = ray_ds.map_batches(
@@ -234,32 +353,42 @@ class DataPrepCLI:
                     corpus="naijavoices",
                     audio_col="audio"
                 ),
-                batch_size=100,
-                batch_format="pyarrow"
+                batch_size=_ray_batch_size(),
+                batch_format="pyarrow",
+                compute=ray.data.TaskPoolStrategy(size=1),
             )
     
+            shard_dir = (Path(output_dir) / "staging" / _shard_id(entity["filename"])).resolve()
+            if shard_dir.exists():
+                shutil.rmtree(shard_dir)
             ray_ds.write_parquet(
-                output_dir + "/data",
+                str(shard_dir),
                 partition_cols=["corpus", "split", "language"],
                 min_rows_per_file=10_000,
                 row_group_size=100
             )
 
-            output_path = f"{output_dir}/data/corpus=naijavoices/split={split}/language={lang.rstrip("_ng")}"
-            files = list(Path(output_path).glob("*.parquet"))
-            for file in files:
-                accx.update_from_local(str(file),"naijavoices",split, lang_map.get(lang,lang))
-            files.append(corpus_ledger.repo.path)
+            files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), _shard_id(entity["filename"]))
+            if not files:
+                raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
+            accx.update_shard_from_local(
+                files, "naijavoices", split, _language_partition(lang),
+                identity=entity["filename"],
+            )
+            self._persist_metrics(accx, output_dir)
             corpus_ledger.mark_completed(entity["filename"], files)
-            failed = self.bucket.upload(files,local_dir=output_dir)
+            failed = self.bucket.upload(files, local_dir=str(shard_dir))
             if len(failed) != 0:
                 raise ValueError(f"Failed to upload {failed}")
 
             corpus_ledger.mark_uploaded(entity["filename"])
-            remove_files(files)
+            failed = self.bucket.upload([corpus_ledger.repo.path], local_dir=output_dir)
+            if failed:
+                raise ValueError(f"Failed to upload ledger {failed}")
+            shutil.rmtree(shard_dir, ignore_errors=True)
 
     def _ingest_yfacc_internal(
-        self, output_dir: str,accx=metrics.MetricsAccumulator, lang_subset: list[str] | None = None
+        self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
     ):
         # see https://huggingface.co/datasets/nolimitsxl/yfacc_yoruba
         repo_id = "nolimitsxl/yfacc_yoruba"
@@ -269,7 +398,7 @@ class DataPrepCLI:
         self._ingest_corpus_internal(output_dir, "YFACC", repo_id, False, corpus_ledger,"transcript", accx, "yor_ng")
         
     def _ingest_yecs_internal(
-            self, output_dir: str,accx=metrics.MetricsAccumulator, lang_subset: list[str] | None = None
+            self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
         ):
             # see https://huggingface.co/datasets/nolimitsxl/yecs_lyngual_labs
             repo_id = "nolimitsxl/yecs_lyngual_labs"
@@ -278,8 +407,8 @@ class DataPrepCLI:
             corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
             self._ingest_corpus_internal(output_dir, "YECS_LYNGUAL_LABS", repo_id, False, corpus_ledger, "transcript", accx, "yor_ng")
 
-    def _ingest_igbo_sync(
-            self, output_dir: str,accx=metrics.MetricsAccumulator, lang_subset: list[str] | None = None
+    def _ingest_igbo_sync_internal(
+            self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
         ):
         # see https://huggingface.co/datasets/nolimitsxl/igbo_sync_processed
         repo_id = "nolimitsxl/igbo_sync_processed"
@@ -289,7 +418,7 @@ class DataPrepCLI:
         self._ingest_corpus_internal(output_dir, "Igbo_sync", repo_id, False, corpus_ledger, "transcript", accx,"ibo_ng")
 
     def _ingest_naed_internal(
-            self, output_dir: str,accx=metrics.MetricsAccumulator, lang_subset: list[str] | None = None
+            self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
         ):
         # see https://huggingface.co/datasets/benjaminogbonna/nigerian_accented_english_dataset
         repo_id = "benjaminogbonna/nigerian_accented_english_dataset"
@@ -299,7 +428,7 @@ class DataPrepCLI:
         split_remap = {"validation" : "val"}
         self._ingest_corpus_internal(output_dir, "nigerian_accented_english_dataset", repo_id, False, corpus_ledger, "sentence", accx, "eng_ng", split_map=split_remap)
 
-    def _ingest_ud_naija_nsc_internal(self, output_dir,accx=metrics.MetricsAccumulator, lang_subset:list[str] | None = None):
+    def _ingest_ud_naija_nsc_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         # see https://huggingface.co/datasets/timniel/Pidgin_ASR_Dataset_Combined
         repo_id = "timniel/Pidgin_ASR_Dataset_Combined"
         splits = ["train"]
@@ -308,7 +437,7 @@ class DataPrepCLI:
         self._ingest_corpus_internal(output_dir, "UD NAIJA NSC", repo_id, False, corpus_ledger, "text", accx,"pcm_ng")
 
     def _ingest_asr_nigerian_pidgin_internal(
-            self, output_dir: str,accx=metrics.MetricsAccumulator,, lang_subset: list[str] | None = None
+            self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
             ):
         # see https://huggingface.co/datasets/asr-nigerian-pidgin/nigerian-pidgin-1.0
         repo_id = "asr-nigerian-pidgin/nigerian-pidgin-1.0"
@@ -318,7 +447,7 @@ class DataPrepCLI:
         split_remap = {"validation" : "val"}
         self._ingest_corpus_internal(output_dir, "nigerian-pidgin-1.0", repo_id, False, corpus_ledger, "sentence", accx,"pcm_ng",split_map=split_remap)
 
-    def _ingest_open_slr_internal(self, output_dir: str, accx=metrics.MetricsAccumulator,lang_subset: list[str] | None = None):
+    def _ingest_open_slr_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "nolimitsxl/open_slr_lang_resource"
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         splits = ["train", "test"]
@@ -332,10 +461,11 @@ class DataPrepCLI:
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
             self._ingest_corpus_internal(output_dir, "Open SLR", repo_id, True, corpus_ledger, "transcript", accx,lang)
 
-    def _ingest_twb_internal(self, output_dir: str, accx=metrics.MetricsAccumulator,lang_subset: list[str] | None = None):
+    def _ingest_twb_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "CLEAR-Global/TWB-Voice-1.0"
         splits = ["train", "dev", "test"]
         split_remap = {"dev" : "val"}
+        lang_remap = {"hau": "hau_ng"}
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         if not lang_subset:
             lang_subset = self.TWB
@@ -344,9 +474,9 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "ClearVoice/TWB", repo_id, True, corpus_ledger, "sentence", accx,lang, split_map=split_remap)
+            self._ingest_corpus_internal(output_dir, "ClearVoice/TWB", repo_id, True, corpus_ledger, "sentence", accx,lang, split_map=split_remap, lang_map=lang_remap)
         
-    def _ingest_aspv1_internal(self, output_dir: str, accx=metrics.MetricsAccumulator,lang_subset: list[str] | None = None):
+    def _ingest_aspv1_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/african-speech-public_v1"
         splits = ["train", "validation", "test"]
         split_remap = {"validation" : "val"}
@@ -366,7 +496,7 @@ class DataPrepCLI:
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
             self._ingest_corpus_internal(output_dir, "Afrispeech/ASP", repo_id, True, corpus_ledger, "text", accx,lang, split_map=split_remap, lang_map=lang_remap, remove_numbers=True)
     
-    def _ingest_obsa_internal(self, output_dir: str, accx=metrics.MetricsAccumulator,lang_subset: list[str] | None = None):
+    def _ingest_obsa_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/open-bible-speech-african"
         lang_remap = {
             "Hausa" : "hau_ng",
@@ -384,7 +514,7 @@ class DataPrepCLI:
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
             self._ingest_corpus_internal(output_dir, "AfriSpeech/open-bible-speech-african", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
     
-    def _ingest_yas_internal(self, output_dir: str, accx=metrics.MetricsAccumulator,lang_subset: list[str] | None = None):
+    def _ingest_yas_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/youversion-african-speech"
         lang_remap = {
             "Hausa_hau" : "hau_ng",
@@ -402,7 +532,7 @@ class DataPrepCLI:
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
             self._ingest_corpus_internal(output_dir, "YouVersion African Speech", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
     
-    def _ingest_fleurs_internal(self, output_dir: str, accx=metrics.MetricsAccumulator,lang_subset: list[str] | None = None):
+    def _ingest_fleurs_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "google/fleurs"
         splits = ["train","validation","test"]
         lang_remap = {
@@ -424,145 +554,158 @@ class DataPrepCLI:
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
             self._ingest_corpus_internal(output_dir, "fleurs", repo_id, True, corpus_ledger, "transcription", accx,lang, lang_map=lang_remap,split_map=split_remap)
     
-    def ingest_yfacc(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_yfacc(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest YFACC datasets.
 
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting YFACC ingestion to: {output_dir}")
         self._ingest_yfacc_internal(output_dir, accx=accx)
         print("YFACC ingestion completed")
     
-    def ingest_yecs(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_yecs(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest YECS datasets.
         
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting YECS ingestion to: {output_dir}")
         self._ingest_yecs_internal(output_dir, accx=accx)
         print("YECS ingestion completed")
 
-    def ingest_igbo_sync(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_igbo_sync(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest Igbo Sync datasets.
         
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting Igbo Sync ingestion to: {output_dir}")
-        self._ingest_igbo_sync(output_dir, accx=accx)
+        self._ingest_igbo_sync_internal(output_dir, accx=accx)
         print("Igbo Sync ingestion completed")
 
-    def ingest_naed_sync(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_naed_sync(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest NAED datasets.
         
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting NAED ingestion to: {output_dir}")
         self._ingest_naed_internal(output_dir, accx=accx)
         print("NAED ingestion completed")
 
-    def ingest_asr_nigerian_pidgin(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_asr_nigerian_pidgin(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest ASR Nigerian Pidgin  datasets.
                 
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting ASR Nigerian Pidgin ingestion to: {output_dir}")
         self._ingest_asr_nigerian_pidgin_internal(output_dir, accx=accx)
         print("ASR Nigerian Pidgin ingestion completed")
 
-    def ingest_ud_naija_nsc(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_ud_naija_nsc(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest ASR Nigerian Pidgin  datasets.
                 
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting UD Naija NSC ingestion to: {output_dir}")
         self._ingest_ud_naija_nsc_internal(output_dir, accx=accx)
         print("UD Naija NSC ingestion completed")
 
-    def ingest_open_slr(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_open_slr(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest Open SLR dataset.
                             
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting Open SLR ingestion to: {output_dir}")
         self._ingest_open_slr_internal(output_dir, accx=accx)
         print("OpenSLR ingestion completed")
 
-    def ingest_twb(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_twb(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest TWB dataset.
                             
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting TWB ingestion to: {output_dir}")
         self._ingest_twb_internal(output_dir, accx=accx)
         print("TWB ingestion completed") 
 
-    def ingest_aspv1(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_aspv1(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest AfriSpeech/ASPV1 dataset.
                                     
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting AfriSpeech ingestion to: {output_dir}")
         self._ingest_aspv1_internal(output_dir, accx=accx)
         print("ASPV1 ingestion completed") 
 
-    def ingest_yas(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_yas(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest AfriSpeech/Youversion-African-Speech dataset.
                                    , accx=accx 
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting AfriSpeech/Youversion-African-Speech ingestion to: {output_dir}")
         self._ingest_yas_internal(output_dir, accx=accx)
         print("AfriSpeech/Youversion-African-Speech ingestion completed") 
 
-    def ingest_obsa(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_obsa(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest AfriSpeech/Open Bible Speech dataset.
                                     
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting AfriSpeech/Open Bible Speech ingestion to: {output_dir}")
         self._ingest_obsa_internal(output_dir, accx=accx)
         print("AfriSpeech/Open Bible Speech ingestion completed") 
 
-    def ingest_fleurs(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_fleurs(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest FLEURS dataset.
                                     
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting FLEURS ingestion to: {output_dir}")
         self._ingest_fleurs_internal(output_dir, accx=accx)
         print("FLEURS completed")
 
-    def ingest_naijavoices(self, output_dir: str, accx: metrics.MetricsAccumulator):
+    def ingest_naijavoices(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest NaijaVoices dataset.
                                             
         Args:
             output_dir: Output directory path for processed Parquet files
 
         """
+        accx = self._resolve_accumulator(output_dir, accx)
         print(f"Starting NaijaVoices ingestion to: {output_dir}")
         self._ingest_naijavoices_internal(output_dir,accx=accx)
         print("NaijaVoices completed")
@@ -570,18 +713,42 @@ class DataPrepCLI:
     def run_set(self, output_dir: str, load_from_hf: bool = False):
         corpii = [self.ingest_yfacc, self.ingest_yecs, self.ingest_igbo_sync, self.ingest_naed_sync, self.ingest_asr_nigerian_pidgin, self.ingest_ud_naija_nsc, self.ingest_open_slr, self.ingest_twb, self.ingest_aspv1, self.ingest_yas, self.ingest_obsa, self.ingest_fleurs, self.ingest_naijavoices]
         if load_from_hf:
-            self.bucket.download(output_dir,"ledger")
-        accumulator = metrics.MetricsAccumulator(output_dir + "/ledger")
+            self.bucket.download(output_dir + "/ledger", "ledger")
+            self.bucket.download(output_dir + "/metrics/metrics.pkl", "metrics/metrics.pkl")
+        accumulator = metrics.MetricsAccumulator(output_dir + "/metrics/metrics.pkl")
 
         for corpus in corpii:
             print(f"Processing  {corpus.__name__}")
             corpus(output_dir, accx=accumulator)
             print(f"{corpus.__name__} completed")
+        metrics_dir = Path(output_dir) / "metrics"
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        tsv_path = metrics_dir / "metrics.tsv"
+        accumulator.write_tsv(str(tsv_path))
+        accumulator.save()
+        failed = self.bucket.upload([accumulator.state_path, tsv_path], local_dir=output_dir)
+        if failed:
+            raise ValueError(f"Failed to upload final metrics {failed}")
     
 
 if __name__ == "__main__":
     if not ray.is_initialized():
-        ray.init()
+        kaggle_working = Path("/kaggle/working")
+        if os.environ.get("RAY_TMPDIR"):
+            ray_temp_dir = Path(os.environ["RAY_TMPDIR"])
+        elif kaggle_working.is_dir():
+            ray_temp_dir = kaggle_working / "ray"
+        else:
+            ray_temp_dir = Path.home() / ".cache" / "wazobia" / "ray"
+        Path(ray_temp_dir).mkdir(parents=True, exist_ok=True)
+        ray.init(
+            _temp_dir=str(ray_temp_dir),
+            runtime_env={
+                "working_dir": str(Path.cwd()),
+                "excludes": [".venv", "data", "notebooks", ".env", "bucket", "ledger", "metrics", "staging"],
+                "env_vars": {"HF_HUB_DISABLE_XET": "1"},
+            },
+        )
 
     ctx = ray.data.DataContext.get_current()
     ctx.enable_rich_progress_bars = True

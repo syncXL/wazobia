@@ -28,7 +28,9 @@ class AudioFeatureProcessor:
     def _extract_one(self, audio):
         orig = audio.get("bytes") if isinstance(audio, dict) else audio
         if orig is None:
-            return self._empty_features()
+            result = self._empty_features()
+            result["resampled_bytes"] = None
+            return result
 
         try:
             samples, sr = sf.read(io.BytesIO(orig), dtype="float32")
@@ -89,7 +91,7 @@ class AudioFeatureProcessor:
                 "spectral_bandwidth_hz": spectral_bandwidth_hz,
                 "resampled_bytes": resampled_bytes,   # None if already 16kHz
             }
-        except Exception as e:
+        except (ValueError, RuntimeError, OSError, sf.LibsndfileError) as e:
             if self._err_count < 5:
                 print(f"[AudioFeatureProcessor] {type(e).__name__}: {e}")
             self._err_count += 1
@@ -106,6 +108,7 @@ class AudioFeatureProcessor:
             "speech_ratio": None,
             "duration_sec": None,
             "spectral_bandwidth_hz": None,
+            "resampled_bytes": None,
         }
 
     def __call__(self, batch: pa.Table) -> pa.Table:

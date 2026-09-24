@@ -100,7 +100,7 @@ def text_normalize(
 
     """
 
-    config = norm_config.get(iso_code, norm_config["*"])
+    config = copy.deepcopy(norm_config.get(iso_code, norm_config["*"]))
 
     for field in [
         "lower_case",

@@ -14,7 +14,7 @@ class TextProcessor:
             "eng_ng" : "eng"
         }
         self.remove_numbers = remove_numbers
-        self.homophones = text_tools.HomophoneMapper(Path(__file__).parent / "pidgin_homophones.yaml") if lang.startswith("pcm") else None
+        self.homophones = text_tools.HomophoneMapper(Path(__file__).parent / "pcm_homophones.yaml") if lang.startswith("pcm") else None
 
     def __call__(self, batch: pa.Table) -> pa.Table:
         transcriptions = batch["transcript"].to_pylist()
@@ -39,4 +39,3 @@ class TextProcessor:
         )
 
         return batch
-        

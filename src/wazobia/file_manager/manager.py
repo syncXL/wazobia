@@ -47,6 +47,10 @@ class HFBucket:
         local_path = Path(local_dir)
         remote_path = f"hf://buckets/{self.bucket}/{file_name.strip('/')}"
 
+        self.fs.invalidate_cache()
+        if not self.fs.exists(remote_path):
+            return None
+
         for attempt in range(tries):
             try:
                 self.fs.invalidate_cache()  # stale listings after recent uploads
