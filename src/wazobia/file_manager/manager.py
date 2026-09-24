@@ -56,8 +56,12 @@ class HFBucket:
                 self.fs.invalidate_cache()  # stale listings after recent uploads
                 is_dir = self.fs.isdir(remote_path)
                 if is_dir:
-                    local_path.mkdir(parents=True, exist_ok=True)
-                    self.fs.get(remote_path, str(local_path) + "/", recursive=True)
+                    # HfFileSystem.get preserves the remote directory's basename
+                    # beneath its destination. Download into the parent so that
+                    # `download(..., "ledger")` yields `local_dir/ledger/...`,
+                    # rather than `local_dir/ledger/ledger/...`.
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.fs.get(remote_path, str(local_path.parent) + "/", recursive=True)
                 else:
                     local_path.parent.mkdir(parents=True, exist_ok=True)
                     self.fs.get_file(remote_path, str(local_path))  # bypasses the dir-skip logic
