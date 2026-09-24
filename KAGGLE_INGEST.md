@@ -16,14 +16,42 @@ os.environ["HF_TOKEN"] = secrets.get_secret("HF_TOKEN")
 os.environ["HF_BUCKET"] = secrets.get_secret("HF_BUCKET")
 ```
 
-From the repository root, sync the locked dependencies and start ingestion:
+From the repository root, install only the ingestion dependencies into Kaggle's active Python environment. This avoids creating a second environment and skips Torch, Transformers, and TorchCodec, which the ingestion code does not import:
 
-```bash
-uv sync --frozen
-uv run python -m wazobia.workflows.dataprep.ingest run_set \
-  --output_dir=/kaggle/working/wazobia \
-  --load_from_hf=True
+```python
+%pip install --no-cache-dir \
+  "ray[data]>=2.58.0" \
+  "datasets>=5.0.1" \
+  "librosa>=1.0.0" \
+  "polars>=1.44.2" \
+  "fire>=0.7.1" \
+  "pydantic-settings>=2.15.0" \
+  "soundfile>=0.14.0" \
+  "PyYAML" \
+  "unidecode>=1.4.0" \
+  "huggingface_hub"
 ```
+
+Restart the notebook session if Kaggle asks for it. Then run from the repository root, using the notebook's active Python executable and the source tree directly:
+
+```python
+import os
+import subprocess
+import sys
+
+repo = "/kaggle/working/wazobia"
+env = os.environ.copy()
+env["PYTHONPATH"] = os.path.join(repo, "src") + os.pathsep + env.get("PYTHONPATH", "")
+subprocess.run(
+    [sys.executable, "-m", "wazobia.workflows.dataprep.ingest", "run_set",
+     "--output_dir=/kaggle/working/wazobia-output", "--load_from_hf=True"],
+    cwd=repo,
+    env=env,
+    check=True,
+)
+```
+
+For a single-corpus run, replace `run_set` with `ingest_yfacc` (or another public `ingest_*` method) and remove `--load_from_hf=True`.
 
 The worker uses `/kaggle/working/ray` for Ray temporary files and excludes `.venv`, `data`, `notebooks`, and `.env` from its Ray working-directory upload. The driver sets `HF_HUB_DISABLE_XET=1` for Ray workers as well.
 
