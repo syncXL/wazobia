@@ -236,7 +236,8 @@ class DataPrepCLI:
         lang: str | None = None,
         split_map : dict[str, str] | None = None,
         lang_map : dict[str,str] | None = None,
-        remove_numbers : bool = False
+        remove_numbers : bool = False,
+        rem_cols: list[str] | None = None,
     ):
         split_map = split_map or {}
         lang_map = lang_map or {}
@@ -252,6 +253,10 @@ class DataPrepCLI:
                 corpus_hf = load_dataset(repo_id, split=split, streaming=True)
             else:
                 corpus_hf = load_dataset(repo_id, lang,split=split, streaming=True)
+
+            columns_to_remove = [column for column in (rem_cols or []) if column in corpus_hf.column_names]
+            if columns_to_remove:
+                corpus_hf = corpus_hf.remove_columns(columns_to_remove)
 
             corpus_hf = corpus_hf.shuffle(seed=42, buffer_size=_shuffle_buffer_size())
             corpus_hf = corpus_hf.cast_column("audio", Audio(decode=False, sampling_rate=16000))
@@ -405,7 +410,7 @@ class DataPrepCLI:
             splits = ["val", "train"]
             corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
             corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "YECS_LYNGUAL_LABS", repo_id, False, corpus_ledger, "transcript", accx, "yor_ng")
+            self._ingest_corpus_internal(output_dir, "YECS_LYNGUAL_LABS", repo_id, False, corpus_ledger, "transcript", accx, "yor_ng", rem_cols=["language_id_per_token"])
 
     def _ingest_igbo_sync_internal(
             self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
@@ -415,7 +420,7 @@ class DataPrepCLI:
         splits = ["val", "train"]
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
-        self._ingest_corpus_internal(output_dir, "Igbo_sync", repo_id, False, corpus_ledger, "transcript", accx,"ibo_ng")
+        self._ingest_corpus_internal(output_dir, "Igbo_sync", repo_id, False, corpus_ledger, "transcript", accx,"ibo_ng", rem_cols=["language_id_per_token"])
 
     def _ingest_naed_internal(
             self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
@@ -459,7 +464,7 @@ class DataPrepCLI:
                 continue
             
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "Open SLR", repo_id, True, corpus_ledger, "transcript", accx,lang)
+            self._ingest_corpus_internal(output_dir, "Open SLR", repo_id, True, corpus_ledger, "transcript", accx,lang, rem_cols=["language_id_per_token"])
 
     def _ingest_twb_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "CLEAR-Global/TWB-Voice-1.0"
