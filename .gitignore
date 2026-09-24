@@ -7,7 +7,7 @@ wheels/
 *.egg-info
 bucket/
 data/
-ledger/
+/ledger/
 .env
 # Virtual environments
 .venv
