@@ -4,7 +4,7 @@ The ingest worker is CPU bound. Run it on Kaggle's free CPU session first; enabl
 
 ## Notebook setup
 
-Enable Internet for the notebook and add Kaggle Secrets named `HF_TOKEN` and `HF_BUCKET`. Set environment variables before importing Hugging Face or Ray packages:
+Enable Internet for the notebook and add Kaggle Secrets named `HF_TOKEN` and `HF_BUCKET`. Set the `HF_BUCKET` secret to the Hugging Face **dataset repository ID** (`owner/name`); the secret name is retained for compatibility. Set environment variables before importing Hugging Face or Ray packages:
 
 ```python
 import os
@@ -59,8 +59,8 @@ Batch transforms default to one Ray worker and batches of 16; streamed shuffling
 
 ## Resume and outputs
 
-Parquet staging is isolated by source shard and is removed after a successful upload. The ledger and metrics checkpoint are uploaded to the configured HF Bucket, so a fresh Kaggle session can restore them with `--load_from_hf=True`. The metrics TSV is written and uploaded when the run finishes; the pickle checkpoint is uploaded after each processed shard.
+Parquet staging is isolated by source shard and is removed after a successful upload. The dataset repository stores all Parquet shards under `data/`, with checkpoints under `ledger/` and `metrics/`. A fresh Kaggle session restores the ledger and metrics checkpoint from the configured dataset repository with `--load_from_hf=True`. The metrics TSV is written and uploaded when the run finishes; the pickle checkpoint is uploaded after each processed shard.
 
-Kaggle's working directory is temporary across sessions. Treat the HF Bucket as the durable copy, and rerun the command with `--load_from_hf=True` after a session interruption. Do not run multiple ingestion processes against the same bucket ledger and metrics checkpoint at once.
+Kaggle's working directory is temporary across sessions. Treat the HF dataset repository as the durable copy, and rerun the command with `--load_from_hf=True` after a session interruption. Do not run multiple ingestion processes against the same repository ledger and metrics checkpoint at once.
 
 If Kaggle's free CPU session limits prevent completing the corpus set, continue with the same durable bucket state on RunPod Community Cloud, then Vast.ai spot. Keep the local RTX 3050 machine for inference only.

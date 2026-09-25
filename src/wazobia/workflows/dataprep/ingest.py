@@ -82,10 +82,10 @@ class DataPrepCLI:
 
     def __init__(self) -> None:
         settings = config.settings
-        self.bucket = manager.HFBucket(settings.hf_bucket, settings.hf_token)
+        self.storage = manager.HFDatasetRepo(settings.hf_dataset_repo, settings.hf_token)
 
     def _persist_metrics(self, accumulator: metrics.MetricsAccumulator, output_dir: str) -> None:
-        failed = self.bucket.upload([accumulator.state_path], local_dir=output_dir)
+        failed = self.storage.upload([accumulator.state_path], local_dir=output_dir)
         if failed:
             raise ValueError(f"Failed to upload metrics checkpoint {failed}")
 
@@ -134,11 +134,11 @@ class DataPrepCLI:
         )
         self._persist_metrics(accumulator, output_dir)
 
-        failed = self.bucket.upload(parquet_files, local_dir=str(upload_root))
+        failed = self.storage.upload(parquet_files, local_dir=str(upload_root))
         if failed:
             raise ValueError(f"Failed to resume upload {failed}")
         corpus_ledger.mark_uploaded(entity["filename"])
-        failed = self.bucket.upload([corpus_ledger.repo.path], local_dir=output_dir)
+        failed = self.storage.upload([corpus_ledger.repo.path], local_dir=output_dir)
         if failed:
             raise ValueError(f"Failed to upload ledger {failed}")
 
@@ -282,13 +282,13 @@ class DataPrepCLI:
             self._persist_metrics(accx, output_dir)
 
             corpus_ledger.mark_completed(entity["filename"], files)
-            failed = self.bucket.upload(files, local_dir=str(shard_dir))
+            failed = self.storage.upload(files, local_dir=str(shard_dir))
 
             if len(failed) != 0:
                 raise ValueError(f"Failed to upload {failed}")
 
             corpus_ledger.mark_uploaded(entity["filename"])
-            failed = self.bucket.upload([corpus_ledger.repo.path], local_dir=output_dir)
+            failed = self.storage.upload([corpus_ledger.repo.path], local_dir=output_dir)
             if failed:
                 raise ValueError(f"Failed to upload ledger {failed}")
             shutil.rmtree(shard_dir, ignore_errors=True)
@@ -382,12 +382,12 @@ class DataPrepCLI:
             )
             self._persist_metrics(accx, output_dir)
             corpus_ledger.mark_completed(entity["filename"], files)
-            failed = self.bucket.upload(files, local_dir=str(shard_dir))
+            failed = self.storage.upload(files, local_dir=str(shard_dir))
             if len(failed) != 0:
                 raise ValueError(f"Failed to upload {failed}")
 
             corpus_ledger.mark_uploaded(entity["filename"])
-            failed = self.bucket.upload([corpus_ledger.repo.path], local_dir=output_dir)
+            failed = self.storage.upload([corpus_ledger.repo.path], local_dir=output_dir)
             if failed:
                 raise ValueError(f"Failed to upload ledger {failed}")
             shutil.rmtree(shard_dir, ignore_errors=True)
@@ -718,8 +718,8 @@ class DataPrepCLI:
     def run_set(self, output_dir: str, load_from_hf: bool = False):
         corpii = [self.ingest_yfacc, self.ingest_yecs, self.ingest_igbo_sync, self.ingest_naed_sync, self.ingest_asr_nigerian_pidgin, self.ingest_ud_naija_nsc, self.ingest_open_slr, self.ingest_twb, self.ingest_aspv1, self.ingest_yas, self.ingest_obsa, self.ingest_fleurs, self.ingest_naijavoices]
         if load_from_hf:
-            self.bucket.download(output_dir + "/ledger", "ledger")
-            self.bucket.download(output_dir + "/metrics/metrics.pkl", "metrics/metrics.pkl")
+            self.storage.download(output_dir + "/ledger", "ledger")
+            self.storage.download(output_dir + "/metrics/metrics.pkl", "metrics/metrics.pkl")
         accumulator = metrics.MetricsAccumulator(output_dir + "/metrics/metrics.pkl")
 
         for corpus in corpii:
@@ -731,7 +731,7 @@ class DataPrepCLI:
         tsv_path = metrics_dir / "metrics.tsv"
         accumulator.write_tsv(str(tsv_path))
         accumulator.save()
-        failed = self.bucket.upload([accumulator.state_path, tsv_path], local_dir=output_dir)
+        failed = self.storage.upload([accumulator.state_path, tsv_path], local_dir=output_dir)
         if failed:
             raise ValueError(f"Failed to upload final metrics {failed}")
     
