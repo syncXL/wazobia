@@ -518,7 +518,6 @@ class DataPrepCLI:
             "Yoruba" : "yor_ng",
             "Igbo" : "ibo_ng"
         }
-        splits = ["train","test"]
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         if not lang_subset:
             lang_subset = self.OBSA
@@ -526,8 +525,117 @@ class DataPrepCLI:
             if lang not in self.OBSA:
                 print(f"{lang} does not exist. Skipping...")
                 continue
-            corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "afriSpeechOpenBibleSpeech", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
+
+            # Process the repository's Parquet shards individually. Loading the
+            # language as one Hugging Face dataset creates a large ReadHuggingFace
+            # task; per-file streaming keeps each read bounded to one shard.
+            files = [
+                item.path
+                for item in self.HFAPI.list_repo_tree(
+                    repo_id,
+                    path_in_repo=lang,
+                    recursive=True,
+                    repo_type="dataset",
+                )
+                if getattr(item, "path", "").lower().endswith(".parquet")
+            ]
+            corpus_ledger.register_files(
+                [
+                    f"{Path(file_path).name.split('-', 1)[0].split('.', 1)[0]}^{file_path}"
+                    for file_path in files
+                ]
+            )
+
+        for entity in corpus_ledger.claim():
+            # Ignore legacy whole-split ledger keys created by the previous
+            # OBSA loader; current keys are `<split>^<parquet path>`.
+            if "^" not in entity["filename"]:
+                continue
+            if entity["status"] == "completed":
+                if self._resume_completed_shard(entity, corpus_ledger, accx, output_dir):
+                    continue
+
+            split, file_path = entity["filename"].split("^", 1)
+            language = file_path.split("/", 1)[0]
+            if language not in lang_subset:
+                continue
+            split = {"validation": "val", "dev": "val"}.get(split, split)
+            corpus_lang = lang_remap[language]
+            parquet_url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{file_path}"
+            corpus_hf = load_dataset(
+                "parquet",
+                data_files=parquet_url,
+                split="train",
+                streaming=True,
+            )
+            ray_ds = None
+            try:
+                corpus_hf = corpus_hf.rename_column("text", "transcript")
+                corpus_hf = corpus_hf.cast_column("audio", Audio(decode=False, sampling_rate=16_000))
+                ray_ds = ray.data.from_huggingface(corpus_hf, concurrency=1)
+                ray_ds = ray_ds.map_batches(
+                    text_tools_corpus.TextProcessor,
+                    fn_constructor_kwargs={"lang": corpus_lang, "remove_numbers": True},
+                    batch_size=_ray_batch_size(),
+                    batch_format="pyarrow",
+                    compute=ray.data.ActorPoolStrategy(size=_ray_workers()),
+                )
+                ray_ds = ray_ds.map_batches(
+                    audio_features.AudioFeatureProcessor,
+                    fn_constructor_kwargs={"audio_column": "audio"},
+                    batch_size=_ray_batch_size(),
+                    batch_format="pyarrow",
+                    compute=ray.data.ActorPoolStrategy(size=_ray_workers()),
+                )
+                ray_ds = ray_ds.map_batches(
+                    partial(
+                        audio_tools.map_to_target_schema,
+                        split=split,
+                        corpus="afriSpeechOpenBibleSpeech",
+                        audio_col="audio",
+                    ),
+                    batch_size=_ray_batch_size(),
+                    batch_format="pyarrow",
+                    compute=ray.data.TaskPoolStrategy(size=1),
+                )
+
+                shard_dir = (Path(output_dir) / "staging" / _shard_id(entity["filename"])).resolve()
+                if shard_dir.exists():
+                    shutil.rmtree(shard_dir)
+                ray_ds.write_parquet(
+                    str(shard_dir),
+                    partition_cols=["corpus", "split", "language"],
+                    min_rows_per_file=10_000,
+                    row_group_size=100,
+                )
+
+                output_files = _unique_parquet_names(
+                    list(shard_dir.rglob("*.parquet")), _shard_id(entity["filename"])
+                )
+                if not output_files:
+                    raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
+                accx.update_shard_from_local(
+                    output_files,
+                    "afriSpeechOpenBibleSpeech",
+                    split,
+                    _language_partition(corpus_lang),
+                    identity=entity["filename"],
+                )
+                self._persist_metrics(accx, output_dir)
+                corpus_ledger.mark_completed(entity["filename"], output_files)
+                failed = self.storage.upload(output_files, local_dir=str(shard_dir))
+                if failed:
+                    raise ValueError(f"Failed to upload {failed}")
+
+                corpus_ledger.mark_uploaded(entity["filename"])
+                failed = self.storage.upload([corpus_ledger.repo.path], local_dir=output_dir)
+                if failed:
+                    raise ValueError(f"Failed to upload ledger {failed}")
+                shutil.rmtree(shard_dir, ignore_errors=True)
+            finally:
+                del ray_ds
+                del corpus_hf
+                gc.collect()
     
     def _ingest_yas_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/youversion-african-speech"
