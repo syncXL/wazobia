@@ -479,7 +479,7 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "ClearVoice/TWB", repo_id, True, corpus_ledger, "sentence", accx,lang, split_map=split_remap, lang_map=lang_remap)
+            self._ingest_corpus_internal(output_dir, "clearVoiceTWB", repo_id, True, corpus_ledger, "sentence", accx,lang, split_map=split_remap, lang_map=lang_remap)
         
     def _ingest_aspv1_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/african-speech-public_v1"
