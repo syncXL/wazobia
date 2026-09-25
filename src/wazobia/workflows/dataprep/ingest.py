@@ -499,7 +499,7 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "Afrispeech/ASP", repo_id, True, corpus_ledger, "text", accx,lang, split_map=split_remap, lang_map=lang_remap, remove_numbers=True)
+            self._ingest_corpus_internal(output_dir, "afrispeechASP", repo_id, True, corpus_ledger, "text", accx,lang, split_map=split_remap, lang_map=lang_remap, remove_numbers=True)
     
     def _ingest_obsa_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/open-bible-speech-african"
@@ -517,7 +517,7 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "AfriSpeech/open-bible-speech-african", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
+            self._ingest_corpus_internal(output_dir, "afriSpeechOpenBibleSpeech", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
     
     def _ingest_yas_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/youversion-african-speech"
@@ -535,7 +535,7 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "YouVersion African Speech", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
+            self._ingest_corpus_internal(output_dir, "YouVersionAfricanSpeech", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
     
     def _ingest_fleurs_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "google/fleurs"
