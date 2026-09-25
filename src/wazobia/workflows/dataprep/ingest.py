@@ -400,7 +400,7 @@ class DataPrepCLI:
         splits = ["test", "val", "train"]
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
-        self._ingest_corpus_internal(output_dir, "YFACC", repo_id, False, corpus_ledger,"transcript", accx, "yor_ng")
+        self._ingest_corpus_internal(output_dir, "YFACC", repo_id, False, corpus_ledger,"transcript", accx, "yor_ng",rem_cols=["language_id_per_token"])
         
     def _ingest_yecs_internal(
             self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
