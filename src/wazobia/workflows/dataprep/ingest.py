@@ -726,7 +726,7 @@ class DataPrepCLI:
         print("NaijaVoices completed")
 
     def run_set(self, output_dir: str, load_from_hf: bool = False):
-        corpii = [self.ingest_yfacc, self.ingest_yecs, self.ingest_igbo_sync, self.ingest_naed_sync, self.ingest_asr_nigerian_pidgin, self.ingest_ud_naija_nsc, self.ingest_open_slr, self.ingest_twb, self.ingest_aspv1, self.ingest_yas, self.ingest_obsa, self.ingest_fleurs, self.ingest_naijavoices]
+        corpii = [self.ingest_yfacc, self.ingest_yecs, self.ingest_igbo_sync, self.ingest_naed_sync, self.ingest_asr_nigerian_pidgin, self.ingest_ud_naija_nsc, self.ingest_open_slr, self.ingest_twb, self.ingest_aspv1, self.ingest_yas, self.ingest_fleurs, self.ingest_naijavoices, self.ingest_obsa]
         if load_from_hf:
             self.storage.download(output_dir + "/ledger", "ledger")
             self.storage.download(output_dir + "/metrics/metrics.pkl", "metrics/metrics.pkl")
