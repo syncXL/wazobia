@@ -3,6 +3,7 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 import datasets
 import fire
+import gc
 import hashlib
 import polars as pl
 import pyarrow as pa
@@ -215,14 +216,19 @@ class DataPrepCLI:
             compute=ray.data.TaskPoolStrategy(size=1),
         )
 
-        ray_ds_stream_.write_parquet(
-            str(output_path),
-            partition_cols=["corpus", "split", "language"],
-            min_rows_per_file=10_000,
-            row_group_size=100
-        )
-
-        return output_path
+        try:
+            ray_ds_stream_.write_parquet(
+                str(output_path),
+                partition_cols=["corpus", "split", "language"],
+                min_rows_per_file=10_000,
+                row_group_size=100
+            )
+            return output_path
+        finally:
+            # Drop the lazy Ray plan promptly so completed shard references can
+            # be reclaimed before the next shard starts.
+            del ray_ds_stream_
+            gc.collect()
 
     def _ingest_corpus_internal(
         self,
@@ -253,41 +259,45 @@ class DataPrepCLI:
                 corpus_hf = load_dataset(repo_id, split=split, streaming=True)
             else:
                 corpus_hf = load_dataset(repo_id, lang,split=split, streaming=True)
+            try:
+                columns_to_remove = [column for column in (rem_cols or []) if column in corpus_hf.column_names]
+                if columns_to_remove:
+                    corpus_hf = corpus_hf.remove_columns(columns_to_remove)
 
-            columns_to_remove = [column for column in (rem_cols or []) if column in corpus_hf.column_names]
-            if columns_to_remove:
-                corpus_hf = corpus_hf.remove_columns(columns_to_remove)
+                corpus_hf = corpus_hf.shuffle(seed=42, buffer_size=_shuffle_buffer_size())
+                corpus_hf = corpus_hf.cast_column("audio", Audio(decode=False, sampling_rate=16000))
+                if text_col != "transcript":
+                    corpus_hf = corpus_hf.rename_column(text_col, "transcript")
 
-            corpus_hf = corpus_hf.shuffle(seed=42, buffer_size=_shuffle_buffer_size())
-            corpus_hf = corpus_hf.cast_column("audio", Audio(decode=False, sampling_rate=16000))
-            if text_col != "transcript":
-                corpus_hf = corpus_hf.rename_column(text_col, "transcript")
-            
-            
-            corpus_lang = lang_map.get(lang or "", lang or "")
-            output_split = split_map.get(split, split)
-            shard_dir = Path(output_dir) / "staging" / _shard_id(entity["filename"])
-            if shard_dir.exists():
-                shutil.rmtree(shard_dir)
-            shard_dir = shard_dir.resolve()
-            self._process_batches(corpus_hf, corpus_lang, output_split, corpus_name, str(shard_dir), remove_numbers=remove_numbers)
-            files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), _shard_id(entity["filename"]))
-            if not files:
-                raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
+                corpus_lang = lang_map.get(lang or "", lang or "")
+                output_split = split_map.get(split, split)
+                shard_dir = Path(output_dir) / "staging" / _shard_id(entity["filename"])
+                if shard_dir.exists():
+                    shutil.rmtree(shard_dir)
+                shard_dir = shard_dir.resolve()
+                self._process_batches(corpus_hf, corpus_lang, output_split, corpus_name, str(shard_dir), remove_numbers=remove_numbers)
+                files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), _shard_id(entity["filename"]))
+                if not files:
+                    raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
 
-            accx.update_shard_from_local(
-                files, corpus_name, output_split, _language_partition(corpus_lang),
-                identity=entity["filename"],
-            )
-            self._persist_metrics(accx, output_dir)
+                accx.update_shard_from_local(
+                    files, corpus_name, output_split, _language_partition(corpus_lang),
+                    identity=entity["filename"],
+                )
+                self._persist_metrics(accx, output_dir)
 
-            corpus_ledger.mark_completed(entity["filename"], files)
-            failed = self.storage.upload(files, local_dir=str(shard_dir))
+                corpus_ledger.mark_completed(entity["filename"], files)
+                failed = self.storage.upload(files, local_dir=str(shard_dir))
 
-            if len(failed) != 0:
-                raise ValueError(f"Failed to upload {failed}")
+                if len(failed) != 0:
+                    raise ValueError(f"Failed to upload {failed}")
 
-            corpus_ledger.mark_uploaded(entity["filename"])
+                corpus_ledger.mark_uploaded(entity["filename"])
+            finally:
+                # Hugging Face streaming datasets retain iterator/shuffle state;
+                # release it before moving on even when this shard fails.
+                del corpus_hf
+                gc.collect()
             failed = self.storage.upload([corpus_ledger.repo.path], local_dir=output_dir)
             if failed:
                 raise ValueError(f"Failed to upload ledger {failed}")
@@ -725,6 +735,7 @@ class DataPrepCLI:
         for corpus in corpii:
             print(f"Processing  {corpus.__name__}")
             corpus(output_dir, accx=accumulator)
+            gc.collect()
             print(f"{corpus.__name__} completed")
         metrics_dir = Path(output_dir) / "metrics"
         metrics_dir.mkdir(parents=True, exist_ok=True)
