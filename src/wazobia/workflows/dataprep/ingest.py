@@ -12,7 +12,7 @@ import shutil
 import ray
 
 from datasets import load_dataset, Audio
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, HfFileSystem
 from functools import partial
 from pathlib import Path
 from typing import Sequence
@@ -319,6 +319,7 @@ class DataPrepCLI:
             "test" : []
         }
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
+        hf_fs = HfFileSystem(token=config.settings.hf_token)
         for folder in folders:
             for file in self.HFAPI.list_repo_tree(repo_id, path_in_repo=folder, repo_type="dataset"):
                 fpath = file.path
@@ -333,16 +334,11 @@ class DataPrepCLI:
             split, fp = entity["filename"].split("^")
             lang = fp.split("-")[0]
             lang = lang_map.get(lang) or lang
-            parquet_url = f"https://huggingface.co/datasets/{repo_id}/resolve/main/{fp}"
-            fp_hf = load_dataset(
-                "parquet",
-                data_files=parquet_url,
-                split="train",
-                streaming=True,
-            )
-            fp_hf = fp_hf.rename_column("text", "transcript")
-            fp_hf = fp_hf.cast_column("audio", Audio(decode=False, sampling_rate=16_000))
-            ray_ds = ray.data.from_huggingface(fp_hf)            
+            parquet_path = f"hf://datasets/{repo_id}/{fp}"
+            # Read Parquet as Arrow so Hugging Face's Audio feature decoder does
+            # not invoke TorchCodec while Ray is reading the source file.
+            ray_ds = ray.data.read_parquet(parquet_path, filesystem=hf_fs)
+            ray_ds = ray_ds.rename_columns({"text": "transcript"})
             ray_ds = ray_ds.map_batches(
                 text_tools_corpus.TextProcessor,
                 fn_constructor_kwargs={"lang" : lang, "remove_numbers" : False},
