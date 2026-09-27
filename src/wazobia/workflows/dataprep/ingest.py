@@ -237,16 +237,17 @@ class DataPrepCLI:
         repo_id: str,
         add_lang_config : bool,
         corpus_ledger : ledger.CorpusLedger,
-        text_col : str,
         accx: metrics.MetricsAccumulator,
         lang: str | None = None,
         split_map : dict[str, str] | None = None,
         lang_map : dict[str,str] | None = None,
         remove_numbers : bool = False,
         rem_cols: list[str] | None = None,
+        rename_cols: dict[str, str] | None = None,
     ):
         split_map = split_map or {}
         lang_map = lang_map or {}
+        rename_cols = rename_cols or {}
         entities = corpus_ledger.claim()
         if add_lang_config:
             entities = [e for e in entities if e["filename"].split("/")[-2] == lang]
@@ -263,11 +264,10 @@ class DataPrepCLI:
                 columns_to_remove = [column for column in (rem_cols or []) if column in corpus_hf.column_names]
                 if columns_to_remove:
                     corpus_hf = corpus_hf.remove_columns(columns_to_remove)
-
                 corpus_hf = corpus_hf.shuffle(seed=42, buffer_size=_shuffle_buffer_size())
+                if rename_cols:
+                    corpus_hf = corpus_hf.rename_columns(rename_cols)
                 corpus_hf = corpus_hf.cast_column("audio", Audio(decode=False, sampling_rate=16000))
-                if text_col != "transcript":
-                    corpus_hf = corpus_hf.rename_column(text_col, "transcript")
 
                 corpus_lang = lang_map.get(lang or "", lang or "")
                 output_split = split_map.get(split, split)
@@ -406,7 +406,7 @@ class DataPrepCLI:
         splits = ["test", "val", "train"]
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
-        self._ingest_corpus_internal(output_dir, "YFACC", repo_id, False, corpus_ledger,"transcript", accx, "yor_ng",rem_cols=["language_id_per_token"])
+        self._ingest_corpus_internal(output_dir, "YFACC", repo_id, False, corpus_ledger, accx, "yor_ng",rem_cols=["language_id_per_token"])
         
     def _ingest_yecs_internal(
             self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
@@ -416,7 +416,7 @@ class DataPrepCLI:
             splits = ["val", "train"]
             corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
             corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "YECS_LYNGUAL_LABS", repo_id, False, corpus_ledger, "transcript", accx, "yor_ng", rem_cols=["language_id_per_token"])
+            self._ingest_corpus_internal(output_dir, "YECS_LYNGUAL_LABS", repo_id, False, corpus_ledger, accx, "yor_ng", rem_cols=["language_id_per_token"])
 
     def _ingest_igbo_sync_internal(
             self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
@@ -426,7 +426,7 @@ class DataPrepCLI:
         splits = ["val", "train"]
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
-        self._ingest_corpus_internal(output_dir, "Igbo_sync", repo_id, False, corpus_ledger, "transcript", accx,"ibo_ng", rem_cols=["language_id_per_token"])
+        self._ingest_corpus_internal(output_dir, "Igbo_sync", repo_id, False, corpus_ledger, accx,"ibo_ng", rem_cols=["language_id_per_token"])
 
     def _ingest_naed_internal(
             self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
@@ -437,7 +437,7 @@ class DataPrepCLI:
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
         split_remap = {"validation" : "val"}
-        self._ingest_corpus_internal(output_dir, "nigerian_accented_english_dataset", repo_id, False, corpus_ledger, "sentence", accx, "eng_ng", split_map=split_remap)
+        self._ingest_corpus_internal(output_dir, "nigerian_accented_english_dataset", repo_id, False, corpus_ledger, accx, "eng_ng", rename_cols={"sentence": "transcript"}, split_map=split_remap)
 
     def _ingest_ud_naija_nsc_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         # see https://huggingface.co/datasets/timniel/Pidgin_ASR_Dataset_Combined
@@ -445,7 +445,7 @@ class DataPrepCLI:
         splits = ["train"]
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
-        self._ingest_corpus_internal(output_dir, "UD NAIJA NSC", repo_id, False, corpus_ledger, "text", accx,"pcm_ng")
+        self._ingest_corpus_internal(output_dir, "UD NAIJA NSC", repo_id, False, corpus_ledger, accx, "pcm_ng", rename_cols={"text": "transcript"})
 
     def _ingest_asr_nigerian_pidgin_internal(
             self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None
@@ -456,7 +456,7 @@ class DataPrepCLI:
         corpus_ledger = ledger.CorpusLedger(output_dir + "/ledger", repo_id=repo_id, repo_type="dataset")
         corpus_ledger.register_files([f"{repo_id}/{split}" for split in splits])
         split_remap = {"validation" : "val"}
-        self._ingest_corpus_internal(output_dir, "nigerian-pidgin-1.0", repo_id, False, corpus_ledger, "sentence", accx,"pcm_ng",split_map=split_remap)
+        self._ingest_corpus_internal(output_dir, "nigerian-pidgin-1.0", repo_id, False, corpus_ledger, accx, "pcm_ng", rename_cols={"sentence": "transcript"}, split_map=split_remap)
 
     def _ingest_open_slr_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "nolimitsxl/open_slr_lang_resource"
@@ -470,7 +470,7 @@ class DataPrepCLI:
                 continue
             
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "Open SLR", repo_id, True, corpus_ledger, "transcript", accx,lang, rem_cols=["language_id_per_token"])
+            self._ingest_corpus_internal(output_dir, "Open SLR", repo_id, True, corpus_ledger, accx,lang, rem_cols=["language_id_per_token"])
 
     def _ingest_twb_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "CLEAR-Global/TWB-Voice-1.0"
@@ -485,7 +485,7 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "clearVoiceTWB", repo_id, True, corpus_ledger, "sentence", accx,lang, split_map=split_remap, lang_map=lang_remap)
+            self._ingest_corpus_internal(output_dir, "clearVoiceTWB", repo_id, True, corpus_ledger, accx, lang, rename_cols={"path": "audio", "sentence": "transcript"}, split_map=split_remap, lang_map=lang_remap)
         
     def _ingest_aspv1_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/african-speech-public_v1"
@@ -505,7 +505,7 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "afrispeechASP", repo_id, True, corpus_ledger, "text", accx,lang, split_map=split_remap, lang_map=lang_remap, remove_numbers=True)
+            self._ingest_corpus_internal(output_dir, "afrispeechASP", repo_id, True, corpus_ledger, accx, lang, rename_cols={"text": "transcript"}, split_map=split_remap, lang_map=lang_remap, remove_numbers=True)
     
     def _ingest_obsa_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/open-bible-speech-african"
@@ -649,7 +649,7 @@ class DataPrepCLI:
                 print(f"{lang} does not exist. Skipping...")
                 continue
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "YouVersionAfricanSpeech", repo_id, True, corpus_ledger, "text", accx,lang, lang_map=lang_remap, remove_numbers=True)
+            self._ingest_corpus_internal(output_dir, "YouVersionAfricanSpeech", repo_id, True, corpus_ledger, accx, lang, rename_cols={"text": "transcript"}, lang_map=lang_remap, remove_numbers=True)
     
     def _ingest_fleurs_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "google/fleurs"
@@ -671,7 +671,7 @@ class DataPrepCLI:
                 continue
 
             corpus_ledger.register_files([f"{repo_id}/{lang}/{split}" for split in splits])
-            self._ingest_corpus_internal(output_dir, "fleurs", repo_id, True, corpus_ledger, "transcription", accx,lang, lang_map=lang_remap,split_map=split_remap)
+            self._ingest_corpus_internal(output_dir, "fleurs", repo_id, True, corpus_ledger, accx, lang, rename_cols={"transcription": "transcript"}, lang_map=lang_remap,split_map=split_remap)
     
     def ingest_yfacc(self, output_dir: str, accx: metrics.MetricsAccumulator | None = None):
         """Ingest YFACC datasets.
