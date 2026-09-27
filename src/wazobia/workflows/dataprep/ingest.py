@@ -327,6 +327,7 @@ class DataPrepCLI:
                 corpus[sp].append(fpath)
                 corpus_ledger.register_file(f"{sp}^{fpath}" )
 
+        pending_uploads = []
         for entity in corpus_ledger.claim():
             if entity["status"] == "completed":
                 if self._resume_completed_shard(entity, corpus_ledger, accx, output_dir):
@@ -386,16 +387,48 @@ class DataPrepCLI:
                 files, "naijavoices", split, _language_partition(lang),
                 identity=entity["filename"],
             )
-            self._persist_metrics(accx, output_dir)
             corpus_ledger.mark_completed(entity["filename"], files)
-            failed = self.storage.upload(files, local_dir=str(shard_dir))
-            if len(failed) != 0:
-                raise ValueError(f"Failed to upload {failed}")
+            pending_uploads.append((entity["filename"], files, shard_dir))
+            if sum(len(pending_files) for _, pending_files, _ in pending_uploads) >= 5:
+                self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir)
+                pending_uploads.clear()
 
-            corpus_ledger.mark_uploaded(entity["filename"])
-            failed = self.storage.upload([corpus_ledger.repo.path], local_dir=output_dir)
-            if failed:
-                raise ValueError(f"Failed to upload ledger {failed}")
+        if pending_uploads:
+            self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir)
+
+    def _upload_completed_shard_batch(self, pending, corpus_ledger, accx, output_dir: str) -> None:
+        """Commit queued shard Parquets in groups of five, with ledger in the final commit."""
+        parquet_entries = []
+        for _, files, shard_dir in pending:
+            for file in files:
+                relative_path = Path(file).resolve().relative_to(Path(shard_dir).resolve())
+                parquet_entries.append((Path(file), (Path("data") / relative_path).as_posix()))
+
+        batches = [parquet_entries[index : index + 5] for index in range(0, len(parquet_entries), 5)]
+        for filename, files, _ in pending:
+            corpus_ledger.mark_uploaded(filename)
+        ledger_path = Path(corpus_ledger.repo.path).resolve()
+        ledger_repo_path = ledger_path.relative_to(Path(output_dir).resolve()).as_posix()
+        metrics_path = Path(accx.state_path).resolve()
+        metrics_repo_path = metrics_path.relative_to(Path(output_dir).resolve()).as_posix()
+        if batches:
+            batches[-1].extend(
+                [(ledger_path, ledger_repo_path), (metrics_path, metrics_repo_path)]
+            )
+        else:
+            batches = [[(ledger_path, ledger_repo_path), (metrics_path, metrics_repo_path)]]
+
+        try:
+            for batch in batches:
+                failed = self.storage.upload_entries(batch, group=len(batch))
+                if failed:
+                    raise ValueError(f"Failed to upload {failed}")
+        except Exception:
+            for filename, files, _ in pending:
+                corpus_ledger.mark_completed(filename, files)
+            raise
+
+        for _, _, shard_dir in pending:
             shutil.rmtree(shard_dir, ignore_errors=True)
 
     def _ingest_yfacc_internal(
@@ -542,6 +575,7 @@ class DataPrepCLI:
                 ]
             )
 
+        pending_uploads = []
         for entity in corpus_ledger.claim():
             # Ignore legacy whole-split ledger keys created by the previous
             # OBSA loader; current keys are `<split>^<parquet path>`.
@@ -617,21 +651,18 @@ class DataPrepCLI:
                     _language_partition(corpus_lang),
                     identity=entity["filename"],
                 )
-                self._persist_metrics(accx, output_dir)
                 corpus_ledger.mark_completed(entity["filename"], output_files)
-                failed = self.storage.upload(output_files, local_dir=str(shard_dir))
-                if failed:
-                    raise ValueError(f"Failed to upload {failed}")
-
-                corpus_ledger.mark_uploaded(entity["filename"])
-                failed = self.storage.upload([corpus_ledger.repo.path], local_dir=output_dir)
-                if failed:
-                    raise ValueError(f"Failed to upload ledger {failed}")
-                shutil.rmtree(shard_dir, ignore_errors=True)
+                pending_uploads.append((entity["filename"], output_files, shard_dir))
+                if sum(len(pending_files) for _, pending_files, _ in pending_uploads) >= 5:
+                    self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir)
+                    pending_uploads.clear()
             finally:
                 del ray_ds
                 del corpus_hf
                 gc.collect()
+
+        if pending_uploads:
+            self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir)
     
     def _ingest_yas_internal(self, output_dir: str, accx: metrics.MetricsAccumulator, lang_subset: list[str] | None = None):
         repo_id = "AfriSpeech/youversion-african-speech"

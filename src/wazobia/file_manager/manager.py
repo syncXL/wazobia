@@ -5,7 +5,7 @@ import shutil
 import time
 from pathlib import Path, PurePosixPath
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
 
 class HFDatasetRepo:
@@ -27,7 +27,7 @@ class HFDatasetRepo:
         files: list[Path],
         local_dir: str,
         remote_prefix: str = "",
-        group: int = 8,
+        group: int = 1,
         tries: int = 5,
     ) -> list[Path]:
         """Upload files to a dataset repo, placing Parquet shards under ``data/``.
@@ -35,9 +35,12 @@ class HFDatasetRepo:
         Other files keep their path relative to ``local_dir``. This keeps ledger
         and metrics at the repository root while consolidating all corpus data.
         """
-        del group  # Kept for compatibility with the previous manager interface.
+        if group < 1:
+            raise ValueError("group must be at least 1")
+        if tries < 1:
+            raise ValueError("tries must be at least 1")
         root = Path(local_dir).resolve()
-        failed: list[Path] = []
+        upload_entries: list[tuple[Path, str]] = []
 
         for file in files:
             file = Path(file).resolve()
@@ -52,20 +55,45 @@ class HFDatasetRepo:
                 relative_path = PurePosixPath(remote_prefix) / relative_path
 
             path_in_repo = relative_path.as_posix()
+            upload_entries.append((file, path_in_repo))
+
+        return self.upload_entries(upload_entries, group=group, tries=tries)
+
+    def upload_entries(
+        self,
+        entries: list[tuple[Path, str]],
+        group: int = 1,
+        tries: int = 5,
+    ) -> list[Path]:
+        """Upload local files to explicit repository paths in grouped commits."""
+        if group < 1:
+            raise ValueError("group must be at least 1")
+        if tries < 1:
+            raise ValueError("tries must be at least 1")
+        failed: list[Path] = []
+
+        for start in range(0, len(entries), group):
+            batch = entries[start : start + group]
             for attempt in range(tries):
                 try:
-                    self.api.upload_file(
-                        path_or_fileobj=str(file),
-                        path_in_repo=path_in_repo,
+                    self.api.create_commit(
                         repo_id=self.repo_id,
                         repo_type="dataset",
+                        operations=[
+                            CommitOperationAdd(path_in_repo, str(file))
+                            for file, path_in_repo in batch
+                        ],
+                        commit_message=f"Upload {len(batch)} file(s)",
                         token=self.token,
                     )
                     break
                 except Exception as exc:
                     if attempt == tries - 1:
-                        print(f"[HFDatasetRepo.upload FAILED] {file} -> {path_in_repo}: {exc}")
-                        failed.append(file)
+                        print(
+                            "[HFDatasetRepo.upload FAILED] "
+                            f"{[str(file) for file, _ in batch]}: {exc}"
+                        )
+                        failed.extend(file for file, _ in batch)
                     else:
                         time.sleep(2 ** attempt * 5)
         return failed
