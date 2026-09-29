@@ -1776,6 +1776,19 @@ wheels = [
 ]
 
 [[package]]
+name = "torchdata"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "torch" },
+    { name = "urllib3" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/d4/af694ef718aedbe95a72760ab9ff7a6a7a44ace2d7f70c27bfeb67c5c503/torchdata-0.11.0-py3-none-any.whl", hash = "sha256:52b940fbbe0e00fb21cabddf528449d1bec5bfb0d0823b7487b15f951658ee33", size = 61968, upload-time = "2025-02-20T22:26:30.666Z" },
+]
+
+[[package]]
 name = "tornado"
 version = "6.5.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1925,6 +1938,7 @@ dependencies = [
     { name = "soundfile" },
     { name = "torch" },
     { name = "torchcodec" },
+    { name = "torchdata" },
     { name = "transformers" },
     { name = "unidecode" },
 ]
@@ -1946,6 +1960,7 @@ requires-dist = [
     { name = "soundfile", specifier = ">=0.14.0" },
     { name = "torch", specifier = ">=2.14.0", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torchcodec", specifier = ">=0.16.0" },
+    { name = "torchdata", specifier = ">=0.11.0" },
     { name = "transformers", specifier = ">=5.17.0" },
     { name = "unidecode", specifier = ">=1.4.0" },
 ]
