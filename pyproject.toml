@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "datasets>=5.0.1",
+    "evaluate>=0.4.6",
     "fire>=0.7.1",
     "huggingface>=0.0.1",
     "ipykernel>=7.3.0",

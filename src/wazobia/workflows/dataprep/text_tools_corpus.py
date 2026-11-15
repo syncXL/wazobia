@@ -1,10 +1,16 @@
+import re
+from pathlib import Path
+
 import pyarrow as pa
 
-from pathlib import Path
 from wazobia.workflows.dataprep import text_tools
 
+
 class TextProcessor:
-    def __init__(self, lang : str, remove_numbers=False):
+    def __init__(self, lang : str, remove_numbers=False, unuttered_words:list[str] | None = None):
+        self.pattern = None
+        if unuttered_words:
+            self.pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, unuttered_words)) + r")\b")
         self.lang = lang
         self.lang_mapping = {
             "yor_ng" : "yor",
@@ -23,6 +29,9 @@ class TextProcessor:
         for text in transcriptions:
             if self.homophones:
                 text = self.homophones(text)
+            if self.pattern:
+                cleaned = self.pattern.sub("", text)
+                text = re.sub(r"\s+", " ", cleaned).strip()
             processed_text = text_tools.wazobia_normalize(text, iso_lang, self.remove_numbers)
             processed_transcriptions.append(processed_text)
 

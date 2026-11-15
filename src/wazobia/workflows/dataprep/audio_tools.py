@@ -27,9 +27,12 @@ def map_to_target_schema(
     Maps a processed batch to the unified target schema.
     """
 
-    if "text" in batch.column_names:
-        batch = batch.drop(["text"])
-    batch = batch.rename_columns({"transcription": "text"})
+    text_column = "transcription" if "transcription" in batch.column_names else "transcript" if "transcript" in batch.column_names else "text"
+    if text_column != "text":
+        batch = batch.rename_columns({text_column: "text"})
+    audio_column = audio_col
+    if audio_column != "audio":
+        batch = batch.rename_columns({audio_column: "audio"})
 
     for name in ("split", "corpus"):
         if name in batch.column_names:
@@ -46,6 +49,4 @@ def map_to_target_schema(
     )
 
     batch = batch.select(TARGET_SCHEMA.names)
-    if audio_col != "audio":
-        batch = batch.rename_columns({audio_col: "audio"})
     return batch.cast(TARGET_SCHEMA, safe=True)

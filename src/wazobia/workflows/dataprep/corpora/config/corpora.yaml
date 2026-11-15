@@ -1,0 +1,245 @@
+corpora:
+  - fleurs:
+      repo_id: google/fleurs
+      include_lang_as_arg: True
+      ingest_strategy: base
+      splits:
+        - train: train
+        - validation: validation
+        - test: test
+      languages:
+        - ha_ng: hau_ng
+        - yo_ng: yor_ng
+        - ig_ng: ibo_ng
+      columns:
+        - audio: audio
+        - transcription: transcript
+      exclude_cols: None
+  - open_bible:
+      repo_id: AfriSpeech/open-bible-speech-african
+      include_lang_as_arg: True
+      ingest_strategy: parquet
+      splits:
+        - train* : train
+        - dev*: test
+      languages:
+        - Hausa: hau_ng
+        - Yoruba: yor_ng
+        - Igbo: ibo_ng
+      columns:
+        - audio: audio
+        - text: transcript
+      dir_format: "{lang}/{split}*.parquet"
+      exclude_cols: None
+  - youversion:
+      repo_id: AfriSpeech/youversion-african-speech
+      include_lang_as_arg: True
+      ingest_strategy: base
+      splits:
+        - train: train
+      languages:
+        - Hausa_hau: hau_ng
+        - Yoruba_yor: yor_ng
+        - Igbo_ibo: ibo_ng
+      columns:
+        - audio: audio
+        - text: transcript
+      exclude_cols: None
+  - afrispeech:
+      repo_id: AfriSpeech/african-speech-public_v1
+      include_lang_as_arg: True
+      ingest_strategy: base
+      splits:
+        - train: train
+        - validation: validation
+        - test: test
+      languages:
+        - hausa_hau: hau_ng
+        - yoruba_yor: yor_ng
+        - igbo_ibo: ibo_ng
+        - pidgin_west_africa_wes: pcm_ng
+      columns:
+        - audio: audio
+        - text: transcript
+      exclude_cols: None
+  - twb_voice:
+      repo_id: CLEAR-Global/TWB-Voice-1.0
+      include_lang_as_arg: True
+      ingest_strategy: base
+      splits:
+        - train: train
+        - dev: validation
+        - test: test
+      languages:
+        - hau: hau_ng
+      columns:
+        - path: audio
+        - sentence: transcript
+      exclude_cols: None
+  - openslr:
+      repo_id: nolimitsxl/open_slr_lang_resource
+      include_lang_as_arg: True
+      ingest_strategy: base
+      splits:
+        - train: train
+        - test: test
+      languages:
+        - yor_ng: None
+        - eng_ng: None
+      exclude_annotations:
+        - yor_ng:
+            - snap
+            - breadth
+            - abrupt
+            - external
+            - hesitation
+      exclude_cols:
+        - language_id_per_token
+  - naijavoices:
+      repo_id: naijavoices/naijavoices-dataset
+      include_lang_as_arg: False
+      ingest_strategy: parquet
+      splits:
+        train: None
+        validation: None
+        test: None
+      split_weight:
+        - 0.7
+        - 0.2
+        - 0.1
+      languages:
+        - yoruba-batch-0: yor_ng
+        - yoruba-batch-1: yor_ng
+        - yoruba-batch-2: yor_ng
+        - igbo-batch-0: ibo_ng
+        - igbo-batch-1: ibo_ng
+        - igbo-batch-2: ibo_ng
+        - hausa-batch-0: hau_ng
+        - hausa-batch-1: hau_ng
+        - hausa-batch-2: hau_ng
+      columns:
+        - audio: audio
+        - text: transcript
+      dir_format: "{lang}/*parquet"
+  - asr_nigerian_pidgin:
+      repo_id: asr-nigerian-pidgin/nigerian-pidgin-1.0
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: None
+        - validation: None
+        - test: None
+      languages:
+        - pcm_ng: None
+      columns:
+        - sentence: transcript
+      exclude_cols: None
+  - udnaija:
+      repo_id: timniel/Pidgin_ASR_Dataset_Combined
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: None
+      languages:
+        - pcm_ng: None
+      columns:
+        - text: transcript
+      exclude_cols: None
+  - naed:
+      repo_id: benjaminogbonna/nigerian_accented_english_dataset
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: None
+        - validation: None
+        - test: None
+      languages:
+        - eng_ng: None
+      columns:
+        - sentence: transcript
+      exclude_cols: None
+  - igbosync:
+      repo_id: nolimitsxl/igbo_sync_processed
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: None
+        - val: validation
+      languages:
+        - ibo_ng: None
+      columns: None
+      exclude_cols:
+        - language_id_per_token
+  - yfacc:
+      repo_id: nolimitsxl/yfacc_yoruba
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: None
+        - val: validation
+        - test: test
+      languages:
+        - yor_ng : yor_ng
+      columns: None
+      exclude_cols:
+        - language_id_per_token
+
+  - yecs:
+      repo_id: nolimitsxl/yecs_lyngual_labs
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: None
+        - val: validation
+      languages:
+        - yor_ng: None
+      columns: None
+      exclude_cols:
+        - language_id_per_token
+  
+  - africanvoices_yoruba:
+      repo_id: Africanvoice/yoruba_african_voices
+      corpus_name: africanvoices
+      ingest_strategy: parquet
+      splits:
+        - train: None
+        - dev: validation
+        - dev_test: test
+      languages:
+        - yor_ng: yor_ng
+      columns:
+        - audio_path: audio
+      exclude_cols: None
+      dir_format: "data/{split}*.parquet"
+  
+  - africanvoices_igbo:
+      repo_id: Africanvoice/igbo_african_voices
+      corpus_name: africanvoices
+      ingest_strategy: parquet
+      splits:
+        - train: None
+        - dev: validation
+        - dev_test: test
+      languages:
+        - ibo_ng: ibo_ng
+      columns:
+        - audio_path: audio
+      exclude_cols: None
+      dir_format: "data/{split}*.parquet"
+  
+  - africanvoices_pidgin:
+      repo_id: Africanvoice/pidgin_african_voices
+      corpus_name: africanvoices
+      ingest_strategy: parquet
+      splits:
+        - train: None
+        - dev: validation
+        - dev_test: test
+      languages:
+        - pcm_ng: pcm_ng
+      columns:
+        - audio_path: audio
+      exclude_cols: None
+      dir_format: "data/{split}*.parquet"
+  
+# huggingface direct config without changing filepath, formatting possibilities to help obsa, naijavoices and africanvoice
