@@ -281,8 +281,9 @@ class CorpusCompiler:
         corpus_content: Mapping[tuple, str]
     ):
         entities = corpus_ledger.claim()
-        for (lang, split), files in corpus_content.items():
-            selected_entities = (x for x in entities if x["filename"] in files)
+        for (lang, split), source_files in corpus_content.items():
+            source_file_set = set(source_files)
+            selected_entities = [x for x in entities if x["filename"] in source_file_set]
             for entity in selected_entities:
                 if entity["status"] == "completed" and \
                     self._resume_completed_shard(entity, corpus_ledger, accx, output_dir, storage):
@@ -300,16 +301,16 @@ class CorpusCompiler:
                     ray_ds_stream_ = ray.data.from_huggingface(corpus_hf)
                     u_words = (ds_config.exclude_annotations or {}).get(new_lang)
                     self._process_batches(ray_ds_stream_, new_lang, new_split, name, shard_dir.resolve(), unuttered_words=u_words)
-                    files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), utils.shard_id(entity["filename"]))
-                    if not files:
+                    out_files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), utils.shard_id(entity["filename"]))
+                    if not out_files:
                         raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
 
-                    accx.update_shard_from_local(files, name, new_split, _language_partition(new_lang), identity=entity["filename"])
+                    accx.update_shard_from_local(out_files, name, new_split, _language_partition(new_lang), identity=entity["filename"])
 
                     self._persist_metrics(accx, output_dir, storage)
 
-                    corpus_ledger.mark_completed(entity["filename"], files)
-                    failed = storage.upload(files, local_dir=str(shard_dir))
+                    corpus_ledger.mark_completed(entity["filename"], out_files)
+                    failed = storage.upload(out_files, local_dir=str(shard_dir))
 
                     if len(failed) != 0:
                         raise ValueError(f"Failed to upload {failed}")
@@ -335,9 +336,14 @@ class CorpusCompiler:
         pending_uploads = []
         entities = corpus_ledger.claim()
         hf_fs = HfFileSystem(token=env_config.settings.hf_token)
-        for (lang, split), files in corpus_content.items():
-            selected_entities = (x for x in entities if x["filename"] in files)
+        for (lang, split), source_files in corpus_content.items():
+            source_file_set = set(source_files)
+            selected_entities = [x for x in entities if x["filename"] in source_file_set]
             for entity in selected_entities:
+                if entity["status"] == "completed" and self._resume_completed_shard(
+                    entity, corpus_ledger, accx, output_dir, storage
+                ):
+                    continue
                 ray_ds = ray.data.read_parquet(entity["filename"], filesystem=hf_fs)
                 rename_cols = {
                     source: target
@@ -358,15 +364,15 @@ class CorpusCompiler:
                     shutil.rmtree(shard_dir)
                 u_words = (ds_config.exclude_annotations or {}).get(new_lang)
                 self._process_batches(ray_ds, new_lang, new_split, name, shard_dir, unuttered_words=u_words)
-                files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), utils.shard_id(entity["filename"]))
-                if not files:
+                out_files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), utils.shard_id(entity["filename"]))
+                if not out_files:
                     raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
                 accx.update_shard_from_local(
-                    files, name, new_split, _language_partition(new_lang),
+                    out_files, name, new_split, _language_partition(new_lang),
                     identity=entity["filename"],
                 )
-                corpus_ledger.mark_completed(entity["filename"], files)
-                pending_uploads.append((entity["filename"], files, shard_dir))
+                corpus_ledger.mark_completed(entity["filename"], out_files)
+                pending_uploads.append((entity["filename"], out_files, shard_dir))
                 if sum(len(pending_files) for _, pending_files, _ in pending_uploads) >= 10:
                     self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir, storage)
                     pending_uploads.clear()
