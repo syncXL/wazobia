@@ -8,7 +8,7 @@ from itertools import product
 from pathlib import Path
 
 import ray
-from datasets import Audio, IterableDataset, load_dataset
+from datasets import Audio, Features, IterableDataset, load_dataset
 from huggingface_hub import HfFileSystem
 
 from wazobia import config as env_config
@@ -255,15 +255,16 @@ class CorpusCompiler:
         if rename_cols:
             ds = ds.rename_columns(rename_cols)
 
-        # Ray's Hugging Face datasource formats batches as Arrow, which can
-        # still invoke the feature decoder on newer `datasets` versions. The
-        # audio processor consumes raw {bytes, path} values and handles
-        # decoding itself, so explicitly disable feature decoding for the whole
-        # stream before Ray starts iterating it.
+        # Ray's Hugging Face datasource applies its own Arrow format and can
+        # still trigger Audio feature decoding. Replace that feature with its
+        # underlying storage struct so Ray receives raw bytes/path and never
+        # invokes TorchCodec before AudioFeatureProcessor can handle the row.
         ds = ds.cast_column("audio", Audio(decode=False))
-        disable_decode = getattr(ds, "decode", None)
-        if callable(disable_decode):
-            ds = disable_decode(False)
+        audio_feature = ds.features["audio"]
+        if isinstance(audio_feature, Audio):
+            raw_features = dict(ds.features)
+            raw_features["audio"] = audio_feature.flatten()
+            ds = ds.cast(features=Features(raw_features))
         return ds
 
     def _persist_metrics(self, accumulator: metrics.MetricsAccumulator, output_dir: str, storage: manager.HFDatasetRepo) -> None:
