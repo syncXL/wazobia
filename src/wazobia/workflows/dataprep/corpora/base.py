@@ -240,31 +240,38 @@ class CorpusCompiler:
                 utils.remove_files(parquet_files)
             return True
 
-    def _prepare_data(self, ds: IterableDataset, remove_cols: Sequence[str] | None = None, rename_cols: Mapping[str, str] | None = None):
-        remove_cols = [column for column in (remove_cols or []) if column in ds.column_names]
+    def _prepare_data(
+        self,
+        ds: IterableDataset,
+        remove_cols: Sequence[str] | None = None,
+        rename_cols: Mapping[str, str] | None = None,
+    ):
+        # 1. Disable Audio decoding FIRST on the raw dataset so it reaches the root
+        # ArrowExamplesIterable before shuffle/remove/rename wrap the ex_iterable.
+        if ds.features:
+            for col_name, feat in list(ds.features.items()):
+                if isinstance(feat, Audio):
+                    ds = ds.cast_column(col_name, Audio(decode=False))
+
+        # 2. Now apply column removals, shuffle, and renames
+        remove_cols = [
+            column for column in (remove_cols or []) if column in ds.column_names
+        ]
         if remove_cols:
-            ds= ds.remove_columns(remove_cols)
+            ds = ds.remove_columns(remove_cols)
+
         ds = ds.shuffle(seed=42, buffer_size=_shuffle_buffer_size())
-        # Hugging Face rejects identity renames (for example audio -> audio).
-        # Ignore missing source columns too, so optional corpus mappings are safe.
+
         rename_cols = {
             source: target
             for source, target in (rename_cols or {}).items()
-            if source != target and source in ds.column_names and target not in ds.column_names
+            if source != target
+            and source in ds.column_names
+            and target not in ds.column_names
         }
         if rename_cols:
             ds = ds.rename_columns(rename_cols)
 
-        # Ray's Hugging Face datasource applies its own Arrow format and can
-        # still trigger Audio feature decoding. Replace that feature with its
-        # underlying storage struct so Ray receives raw bytes/path and never
-        # invokes TorchCodec before AudioFeatureProcessor can handle the row.
-        ds = ds.cast_column("audio", Audio(decode=False))
-        audio_feature = ds.features["audio"]
-        if isinstance(audio_feature, Audio):
-            raw_features = dict(ds.features)
-            raw_features["audio"] = audio_feature.flatten()
-            ds = ds.cast(features=Features(raw_features))
         return ds
 
     def _persist_metrics(self, accumulator: metrics.MetricsAccumulator, output_dir: str, storage: manager.HFDatasetRepo) -> None:
