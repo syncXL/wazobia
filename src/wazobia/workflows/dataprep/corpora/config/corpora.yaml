@@ -20,7 +20,7 @@ corpora:
       ingest_strategy: parquet
       splits:
         - train: train
-        - dev: test
+        - test: test
       languages:
         - Hausa: hau_ng
         - Yoruba: yor_ng

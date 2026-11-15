@@ -146,10 +146,15 @@ class CorpusCompiler:
                 # combine into `**`, which fsspec rejects inside a path segment.
                 fpath = fpath.replace("**", "*")
                 files = self.get_files_from_path(fpath)
+                if not files:
+                    raise FileNotFoundError(
+                        f"No Parquet files found for {ds_config.repo_id}, "
+                        f"language {old_lang!r}, split {old_split!r}; glob was {fpath!r}"
+                    )
                 n_key = (old_lang, old_split)
                 cur_files = corpus_content.get(n_key,[])
                 cur_files.extend(files)
-                corpus_content[n_key] = files
+                corpus_content[n_key] = cur_files
                 corpus_ledger.register_files(files)
         return corpus_content
 
@@ -250,7 +255,15 @@ class CorpusCompiler:
         if rename_cols:
             ds = ds.rename_columns(rename_cols)
 
-        ds = ds.cast_column("audio", Audio(decode=False, sampling_rate=16_000))
+        # Ray's Hugging Face datasource formats batches as Arrow, which can
+        # still invoke the feature decoder on newer `datasets` versions. The
+        # audio processor consumes raw {bytes, path} values and handles
+        # decoding itself, so explicitly disable feature decoding for the whole
+        # stream before Ray starts iterating it.
+        ds = ds.cast_column("audio", Audio(decode=False))
+        disable_decode = getattr(ds, "decode", None)
+        if callable(disable_decode):
+            ds = disable_decode(False)
         return ds
 
     def _persist_metrics(self, accumulator: metrics.MetricsAccumulator, output_dir: str, storage: manager.HFDatasetRepo) -> None:
