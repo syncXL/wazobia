@@ -358,7 +358,7 @@ class CorpusCompiler:
                     pending_uploads.clear()
         
         if pending_uploads:
-            self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir)
+            self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir, storage)
 
     def _upload_completed_shard_batch(self, pending, corpus_ledger, accx, output_dir: str, storage: manager.HFDatasetRepo) -> None:
         """Commit queued shard Parquets in groups of five, with ledger in the final commit."""
