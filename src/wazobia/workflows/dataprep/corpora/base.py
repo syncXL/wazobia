@@ -231,11 +231,18 @@ class CorpusCompiler:
                 utils.remove_files(parquet_files)
             return True
 
-    def _prepare_data(self, ds: IterableDataset , remove_cols : list[str] = [], rename_cols: dict[str, str] =[]):
+    def _prepare_data(self, ds: IterableDataset, remove_cols: Sequence[str] | None = None, rename_cols: Mapping[str, str] | None = None):
         remove_cols = [column for column in (remove_cols or []) if column in ds.column_names]
         if remove_cols:
             ds= ds.remove_columns(remove_cols)
         ds = ds.shuffle(seed=42, buffer_size=_shuffle_buffer_size())
+        # Hugging Face rejects identity renames (for example audio -> audio).
+        # Ignore missing source columns too, so optional corpus mappings are safe.
+        rename_cols = {
+            source: target
+            for source, target in (rename_cols or {}).items()
+            if source != target and source in ds.column_names and target not in ds.column_names
+        }
         if rename_cols:
             ds = ds.rename_columns(rename_cols)
 
@@ -314,8 +321,13 @@ class CorpusCompiler:
             selected_entities = (x for x in entities if x["filename"] in files)
             for entity in selected_entities:
                 ray_ds = ray.data.read_parquet(entity["filename"], filesystem=hf_fs)
-                if ds_config.columns:
-                    ray_ds = ray_ds.rename_columns(ds_config.columns)
+                rename_cols = {
+                    source: target
+                    for source, target in (ds_config.columns or {}).items()
+                    if source != target and source in ray_ds.schema().names and target not in ray_ds.schema().names
+                }
+                if rename_cols:
+                    ray_ds = ray_ds.rename_columns(rename_cols)
                 if ds_config.exclude_cols:
                     drop_cols = [c for c in ds_config.exclude_cols if c in ray_ds.schema().names]
                     if drop_cols:

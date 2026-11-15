@@ -12,7 +12,6 @@ corpora:
         - yo_ng: yor_ng
         - ig_ng: ibo_ng
       columns:
-        - audio: audio
         - transcription: transcript
       exclude_cols: None
   - open_bible:
@@ -27,7 +26,6 @@ corpora:
         - Yoruba: yor_ng
         - Igbo: ibo_ng
       columns:
-        - audio: audio
         - text: transcript
       dir_format: "{lang}/{split}*.parquet"
       exclude_cols: None
@@ -42,7 +40,6 @@ corpora:
         - Yoruba_yor: yor_ng
         - Igbo_ibo: ibo_ng
       columns:
-        - audio: audio
         - text: transcript
       exclude_cols: None
   - afrispeech:
@@ -59,7 +56,6 @@ corpora:
         - igbo_ibo: ibo_ng
         - pidgin_west_africa_wes: pcm_ng
       columns:
-        - audio: audio
         - text: transcript
       exclude_cols: None
   - twb_voice:
@@ -118,7 +114,6 @@ corpora:
         - hausa-batch-1: hau_ng
         - hausa-batch-2: hau_ng
       columns:
-        - audio: audio
         - text: transcript
       dir_format: "{lang}/*parquet"
   - asr_nigerian_pidgin:
