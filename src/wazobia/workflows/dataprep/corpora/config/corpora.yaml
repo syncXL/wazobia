@@ -19,8 +19,8 @@ corpora:
       include_lang_as_arg: True
       ingest_strategy: parquet
       splits:
-        - train* : train
-        - dev*: test
+        - train: train
+        - dev: test
       languages:
         - Hausa: hau_ng
         - Yoruba: yor_ng

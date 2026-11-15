@@ -133,6 +133,7 @@ class CorpusCompiler:
             split_weight = ds_config.split_weight or []
             if len(split_weight) != 0:
                 fpath = f"hf://datasets/{ds_config.repo_id}/" + dir_formatting.format(lang=old_lang, split="*")
+                fpath = fpath.replace("**", "*")
                 files = self.get_files_from_path(fpath)
                 for file in files:
                     new_split = utils.assign_split(file, split_weight)
@@ -141,6 +142,9 @@ class CorpusCompiler:
                 continue
             for old_split in ds_config.splits:
                 fpath = f"hf://datasets/{ds_config.repo_id}/" + dir_formatting.format(lang=old_lang, split=old_split)
+                # A split pattern and a wildcard in dir_format can otherwise
+                # combine into `**`, which fsspec rejects inside a path segment.
+                fpath = fpath.replace("**", "*")
                 files = self.get_files_from_path(fpath)
                 n_key = (old_lang, old_split)
                 cur_files = corpus_content.get(n_key,[])
