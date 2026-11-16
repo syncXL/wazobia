@@ -380,7 +380,7 @@ class CorpusCompiler:
                 )
                 corpus_ledger.mark_completed(entity["filename"], out_files)
                 pending_uploads.append((entity["filename"], out_files, shard_dir))
-                if sum(len(pending_files) for _, pending_files, _ in pending_uploads) >= 10:
+                if sum(len(pending_files) for _, pending_files, _ in pending_uploads) >= 100:
                     self._upload_completed_shard_batch(pending_uploads, corpus_ledger, accx, output_dir, storage)
                     pending_uploads.clear()
         
