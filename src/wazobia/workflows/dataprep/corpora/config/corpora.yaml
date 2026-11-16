@@ -236,5 +236,18 @@ corpora:
         - audio_path: audio
       exclude_cols: None
       dir_format: "data/{split}*.parquet"
-  
-# huggingface direct config without changing filepath, formatting possibilities to help obsa, naijavoices and africanvoice
+
+  - africanvoices_hausa:
+      repo_id: Africanvoice/hausa_african_voices
+      corpus_name: africanvoices
+      ingest_strategy: parquet
+      splits:
+        - train: None
+        - dev: validation
+        - dev_test: test
+      languages:
+        - hau_ng: hau_ng
+      columns:
+        - audio: audio
+      exclude_cols: None
+      dir_format: "data/{split}*.parquet"
