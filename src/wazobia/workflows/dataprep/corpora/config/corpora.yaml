@@ -208,7 +208,7 @@ corpora:
       dir_format: "data/{split}*.parquet"
   
   - africanvoices_igbo:
-      repo_id: Africanvoice/igbo_african_voices
+      repo_id: Africanvoice/igbo_african_voice
       corpus_name: africanvoices
       ingest_strategy: parquet
       splits:
