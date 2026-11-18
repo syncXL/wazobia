@@ -223,7 +223,7 @@ corpora:
       dir_format: "data/{split}-*.parquet"
   
   - africanvoices_pidgin:
-      repo_id: Africanvoice/pidgin_african_voices
+      repo_id: Africanvoice/naija_african_voices
       corpus_name: africanvoices
       ingest_strategy: parquet
       splits:
