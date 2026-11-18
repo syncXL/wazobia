@@ -205,7 +205,7 @@ corpora:
       columns:
         - audio_path: audio
       exclude_cols: None
-      dir_format: "data/{split}*.parquet"
+      dir_format: "data/{split}-*.parquet"
   
   - africanvoices_igbo:
       repo_id: Africanvoice/igbo_african_voice
@@ -220,7 +220,7 @@ corpora:
       columns:
         - audio_path: audio
       exclude_cols: None
-      dir_format: "data/{split}*.parquet"
+      dir_format: "data/{split}-*.parquet"
   
   - africanvoices_pidgin:
       repo_id: Africanvoice/pidgin_african_voices
@@ -235,7 +235,7 @@ corpora:
       columns:
         - audio_path: audio
       exclude_cols: None
-      dir_format: "data/{split}*.parquet"
+      dir_format: "data/{split}-*.parquet"
 
   - africanvoices_hausa:
       repo_id: Africanvoice/hausa_african_voices
@@ -250,4 +250,4 @@ corpora:
       columns:
         - audio: audio
       exclude_cols: None
-      dir_format: "data/{split}*.parquet"
+      dir_format: "data/{split}-*.parquet"
