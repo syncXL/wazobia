@@ -371,7 +371,22 @@ class CorpusCompiler:
                     shutil.rmtree(shard_dir)
                 u_words = (ds_config.exclude_annotations or {}).get(new_lang)
                 self._process_batches(ray_ds, new_lang, new_split, name, shard_dir, unuttered_words=u_words)
-                out_files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), utils.shard_id(entity["filename"]))
+                shard_files = sorted(shard_dir.rglob("*.parquet")) if shard_dir.is_dir() else []
+                print(
+                    "[shard-write-check] "
+                    f"cwd={Path.cwd()} shard_dir={shard_dir} "
+                    f"directory_exists={shard_dir.is_dir()} parquet_count={len(shard_files)}"
+                )
+                for shard_file in shard_files:
+                    try:
+                        print(
+                            f"[shard-write-check] file={shard_file.resolve()} "
+                            f"is_file={shard_file.is_file()} bytes={shard_file.stat().st_size}"
+                        )
+                    except OSError as exc:
+                        print(f"[shard-write-check] file={shard_file} stat_error={exc!r}")
+
+                out_files = _unique_parquet_names(shard_files, utils.shard_id(entity["filename"]))
                 if not out_files:
                     raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
                 accx.update_shard_from_local(
@@ -396,8 +411,6 @@ class CorpusCompiler:
                 parquet_entries.append((Path(file), (Path("data") / relative_path).as_posix()))
 
         batches = [parquet_entries[index : index + 5] for index in range(0, len(parquet_entries), 5)]
-        for filename, files, _ in pending:
-            corpus_ledger.mark_uploaded(filename)
         ledger_path = Path(corpus_ledger.repo.path).resolve()
         ledger_repo_path = ledger_path.relative_to(Path(output_dir).resolve()).as_posix()
         metrics_path = Path(accx.state_path).resolve()
@@ -416,11 +429,33 @@ class CorpusCompiler:
             if not Path(file).is_file()
         ]
         if missing_files:
+            staging_dir = Path(output_dir) / "staging"
+            staging_entries = list(staging_dir.glob("*")) if staging_dir.is_dir() else []
+            print(
+                "[pre-upload-check] "
+                f"cwd={Path.cwd()} output_dir={Path(output_dir).resolve()} "
+                f"staging_exists={staging_dir.is_dir()} "
+                f"staging_entry_count={len(staging_entries)}"
+            )
+            for file in missing_files:
+                missing_path = Path(file)
+                parent = missing_path.parent
+                try:
+                    entries = sorted(p.name for p in parent.iterdir()) if parent.is_dir() else []
+                    print(
+                        f"[pre-upload-check] missing={missing_path} "
+                        f"parent_exists={parent.is_dir()} parent_entries={entries[:20]}"
+                    )
+                except OSError as exc:
+                    print(f"[pre-upload-check] missing={missing_path} parent_stat_error={exc!r}")
             raise FileNotFoundError(
                 "Cannot upload shard batch because these local files are missing "
                 "or are not regular files:\n- "
                 + "\n- ".join(missing_files)
             )
+
+        for filename, files, _ in pending:
+            corpus_ledger.mark_uploaded(filename)
 
         try:
             for batch in batches:
