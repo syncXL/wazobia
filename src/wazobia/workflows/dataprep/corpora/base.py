@@ -409,6 +409,19 @@ class CorpusCompiler:
         else:
             batches = [[(ledger_path, ledger_repo_path), (metrics_path, metrics_repo_path)]]
 
+        missing_files = [
+            str(Path(file).resolve())
+            for batch in batches
+            for file, _ in batch
+            if not Path(file).is_file()
+        ]
+        if missing_files:
+            raise FileNotFoundError(
+                "Cannot upload shard batch because these local files are missing "
+                "or are not regular files:\n- "
+                + "\n- ".join(missing_files)
+            )
+
         try:
             for batch in batches:
                 failed = storage.upload_entries(batch, group=len(batch))
