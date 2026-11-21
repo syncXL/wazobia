@@ -8,7 +8,7 @@ corpora:
         - train: train
         - valid: validation
       languages:
-        - fra: fon
+        - fra: fra
       columns:
         - utterance: transcript
       exclude_cols: None

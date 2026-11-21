@@ -83,8 +83,6 @@ class DataPrepCLI:
                 if cconfig.output_repo_id
                 else self.storage
             )
-            if load_from_hf and cconfig.output_repo_id:
-                corpus_storage.download(output_dir + "/ledger", "ledger")
             corpiler(output_dir, accumulator, cconfig, corpus_storage)
             gc.collect()
             print(f"{cname} completed")
