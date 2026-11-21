@@ -45,7 +45,7 @@ corpora:
   - waxal-nlp:
       repo_id: google/WaxalNLP
       include_lang_as_arg: True
-      ingest_strategy: base
+      ingest_strategy: parquet
       splits:
         - train: train
         - validation: validation
@@ -55,6 +55,7 @@ corpora:
         - ewe_asr: ewe
       columns:
         - transcription: transcript
+      dir_format: "data/ASR/ewe/ewe-{split}-*.parquet"
   
   - open_bible:
       repo_id: AfriSpeech/open-bible-speech-african
