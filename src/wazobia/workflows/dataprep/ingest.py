@@ -24,10 +24,17 @@ from wazobia.workflows.dataprep.corpora import config as corpus_config
 class DataPrepCLI:
 
     def __init__(self) -> None:
-        settings = config.settings
-        self.storage = manager.HFDatasetRepo(settings.hf_dataset_repo, settings.hf_token)
-        ds_config_path = Path(__file__).parent / "corpora/config/corpora.yaml"
-        self.configs = utils.load_yaml(ds_config_path, corpus_config.Corpora)
+        self.settings = config.settings
+        self.storage = manager.HFDatasetRepo(self.settings.hf_dataset_repo, self.settings.hf_token)
+
+    @staticmethod
+    def _load_configs(config_name: str) -> corpus_config.Corpora:
+        if not config_name.replace("_", "").replace("-", "").isalnum():
+            raise ValueError(f"Invalid config name: {config_name!r}")
+        config_path = Path(__file__).parent / "corpora/config" / f"{config_name}.yaml"
+        if not config_path.is_file():
+            raise FileNotFoundError(f"Corpus config not found: {config_path}")
+        return utils.load_yaml(config_path, corpus_config.Corpora)
 
     @staticmethod
     def _resolve_accumulator(output_dir: str, accumulator: metrics.MetricsAccumulator | None) -> metrics.MetricsAccumulator:
@@ -62,7 +69,8 @@ class DataPrepCLI:
             if ray_ver < (2, 49):
                 print("⚠️  Warning: ray version < 2.49 may have performance issues")
 
-    def run_full(self, output_dir: str, load_from_hf: bool = False):
+    def run_full(self, output_dir: str, load_from_hf: bool = False, config_name: str = "corpora"):
+        self.configs = self._load_configs(config_name)
         if load_from_hf:
             self.storage.download(output_dir + "/ledger", "ledger")
             self.storage.download(output_dir + "/metrics/metrics.pkl", "metrics/metrics.pkl")
@@ -70,7 +78,14 @@ class DataPrepCLI:
         corpiler = base.CorpusCompiler()
         for cname, cconfig in self.configs.corpora.items():
             print(f"Processing  {cname}")
-            corpiler(output_dir, accumulator, cconfig, self.storage)
+            corpus_storage = (
+                manager.HFDatasetRepo(cconfig.output_repo_id, self.settings.hf_token)
+                if cconfig.output_repo_id
+                else self.storage
+            )
+            if load_from_hf and cconfig.output_repo_id:
+                corpus_storage.download(output_dir + "/ledger", "ledger")
+            corpiler(output_dir, accumulator, cconfig, corpus_storage)
             gc.collect()
             print(f"{cname} completed")
         metrics_dir = Path(output_dir) / "metrics"

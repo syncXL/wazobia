@@ -1,0 +1,105 @@
+corpora:
+  - ffstc:
+      corpus_name: ffstc
+      repo_id: GbeBenin/FFSTC-2
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: train
+        - valid: validation
+      languages:
+        - fra: fon
+      columns:
+        - utterance: transcript
+      exclude_cols: None
+      compile_text: False
+      normalize: None
+  - fongbe-zenodo: # doesn't retain tone
+      corpus_name: fongbe-speech-zenodo
+      repo_id: Professor/fongbe-speech-zenodo
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: train
+        - validation: validation
+        - test: test
+      languages:
+        - fon: fon
+      columns:
+        - text: transcript
+      normalize: fon
+  
+  - fongbe-hausa: #untoned, unstructured
+      corpus_name: fon_hau
+      repo_id: Professor/fongbe-hausa-asr-dataset
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        - train: train
+      languages:
+        - fon: fon
+      columns:
+        - transcription: transcript
+      normalize: fon
+      compile_text: False
+
+  - waxal-nlp:
+      repo_id: google/WaxalNLP
+      include_lang_as_arg: True
+      ingest_strategy: base
+      splits:
+        - train: train
+        - validation: validation
+        - test: test
+        - unlabeled: unlabeled
+      languages:
+        - ewe_asr: ewe
+      columns:
+        - transcription: transcript
+  
+  - open_bible:
+      repo_id: AfriSpeech/open-bible-speech-african
+      include_lang_as_arg: True
+      ingest_strategy: parquet
+      splits:
+        - train: train
+        - test: test
+      languages:
+        - Ewe: ewe
+      columns:
+        - text: transcript
+      dir_format: "{lang}/{split}*.parquet"
+      exclude_cols: None
+
+  - youversion:
+      repo_id: AfriSpeech/youversion-african-speech
+      include_lang_as_arg: True
+      ingest_strategy: base
+      splits:
+        - train: train
+      languages:
+        - ewe_ewe: Ewe_ewe
+      columns:
+        - text: transcript
+      exclude_cols: None
+
+  - zindi:
+      corpus_name: zindi
+      repo_id: nolimitsxl/fongbe-zindi
+      output_repo_id: nolimitsxl/zindi-competition
+      include_lang_as_arg: False
+      ingest_strategy: base
+      splits:
+        train: train
+        train_uncertain: train
+        validation: validation
+        test: test
+      languages:
+        - fon: fon
+      columns:
+        - transcription: transcript
+      normalize: fon
+      compile_text:
+        - train
+        - train_uncertain
+

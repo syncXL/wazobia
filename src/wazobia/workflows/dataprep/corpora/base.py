@@ -8,6 +8,7 @@ from itertools import product
 from pathlib import Path
 
 import ray
+import pyarrow.parquet as pq
 from datasets import Audio, Features, IterableDataset, load_dataset
 from huggingface_hub import HfFileSystem
 
@@ -46,6 +47,19 @@ def _unique_parquet_names(files: list[Path], shard_id: str) -> list[Path]:
     return renamed
 
 
+def _compile_manifest(files: Sequence[Path], output_dir: str, corpus: str, split: str, language: str) -> Path:
+    """Append normalized transcription rows from a processed shard to its split manifest."""
+    manifest = Path(output_dir) / "data" / f"corpus={corpus}" / f"split={split}" / f"language={language}" / "transcript_manifest.txt"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    with manifest.open("a", encoding="utf-8", newline="\n") as target:
+        for parquet_file in sorted(files):
+            table = pq.read_table(parquet_file, columns=["transcription"])
+            for text in table.column("transcription").to_pylist():
+                if text:
+                    target.write(text.replace("\r", " ").replace("\n", " ") + "\n")
+    return manifest
+
+
 class CorpusCompiler:
     def __init__(self):
         self.register_strategy = {
@@ -78,11 +92,11 @@ class CorpusCompiler:
         files = fs.glob(fp)
         return files
 
-    def _process_batches(self, ray_ds_stream_: ray.data.Dataset, lang, split, corpus, output_path, unuttered_words: Sequence[str] | None = None,audio_column: str = "audio", remove_numbers=False):
+    def _process_batches(self, ray_ds_stream_: ray.data.Dataset, lang, split, corpus, output_path, unuttered_words: Sequence[str] | None = None,audio_column: str = "audio", remove_numbers=False, normalizer: str | None = None):
         
         ray_ds_stream_ = ray_ds_stream_.map_batches(
             text_tools_corpus.TextProcessor,
-            fn_constructor_kwargs={"lang" : lang, "remove_numbers" : remove_numbers, "unuttered_words": unuttered_words},
+            fn_constructor_kwargs={"lang" : lang, "remove_numbers" : remove_numbers, "unuttered_words": unuttered_words, "normalizer": normalizer},
             batch_size=_ray_batch_size(),
             batch_format="pyarrow",
             compute=ray.data.ActorPoolStrategy(size=_ray_workers()),
@@ -304,13 +318,19 @@ class CorpusCompiler:
                     new_lang = ds_config.languages.get(lang) or lang
                     new_split = ds_config.splits.get(split) or split
                     shard_dir = Path(output_dir) / "staging" / utils.shard_id(entity["filename"])
-                    name = ds_config.corpus_name or ds_config.repo_id.split("/")[-1]
+                    name = (ds_config.corpus_name or ds_config.repo_id.split("/")[-1]).lower()
                     ray_ds_stream_ = ray.data.from_huggingface(corpus_hf)
                     u_words = (ds_config.exclude_annotations or {}).get(new_lang)
-                    self._process_batches(ray_ds_stream_, new_lang, new_split, name, shard_dir.resolve(), unuttered_words=u_words)
+                    self._process_batches(ray_ds_stream_, new_lang, new_split, name, shard_dir.resolve(), unuttered_words=u_words, normalizer=ds_config.normalize)
                     out_files = _unique_parquet_names(list(shard_dir.rglob("*.parquet")), utils.shard_id(entity["filename"]))
                     if not out_files:
                         raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
+
+                    if ds_config.compile_text is True or split in (ds_config.compile_text or []):
+                        manifest = _compile_manifest(out_files, output_dir, name, new_split, _language_partition(new_lang))
+                        failed = storage.upload([manifest], local_dir=output_dir)
+                        if failed:
+                            raise ValueError(f"Failed to upload transcript manifest {failed}")
 
                     accx.update_shard_from_local(out_files, name, new_split, _language_partition(new_lang), identity=entity["filename"])
 
@@ -365,12 +385,12 @@ class CorpusCompiler:
                         ray_ds = ray_ds.drop_columns(drop_cols)
                 new_lang = ds_config.languages.get(lang) or lang
                 new_split = ds_config.splits.get(split) or split
-                name = ds_config.corpus_name or ds_config.repo_id.split("/")[-1]
+                name = (ds_config.corpus_name or ds_config.repo_id.split("/")[-1]).lower()
                 shard_dir = (Path(output_dir) / "staging" / utils.shard_id(entity["filename"])).resolve()
                 if shard_dir.exists():
                     shutil.rmtree(shard_dir)
                 u_words = (ds_config.exclude_annotations or {}).get(new_lang)
-                self._process_batches(ray_ds, new_lang, new_split, name, shard_dir, unuttered_words=u_words)
+                self._process_batches(ray_ds, new_lang, new_split, name, shard_dir, unuttered_words=u_words, normalizer=ds_config.normalize)
                 shard_files = sorted(shard_dir.rglob("*.parquet")) if shard_dir.is_dir() else []
                 print(
                     "[shard-write-check] "
@@ -389,6 +409,11 @@ class CorpusCompiler:
                 out_files = _unique_parquet_names(shard_files, utils.shard_id(entity["filename"]))
                 if not out_files:
                     raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
+                if ds_config.compile_text is True or split in (ds_config.compile_text or []):
+                    manifest = _compile_manifest(out_files, output_dir, name, new_split, _language_partition(new_lang))
+                    failed = storage.upload([manifest], local_dir=output_dir)
+                    if failed:
+                        raise ValueError(f"Failed to upload transcript manifest {failed}")
                 accx.update_shard_from_local(
                     out_files, name, new_split, _language_partition(new_lang),
                     identity=entity["filename"],
@@ -476,7 +501,7 @@ def build_dataset_readme(ds_configs: config.Corpora) -> str:
     from collections import defaultdict
     configs = defaultdict(lambda: defaultdict(set))
     for _, corpus in ds_configs.corpora.items():
-        corpus_name = corpus.corpus_name or corpus.repo_id.split("/")[-1]
+        corpus_name = (corpus.corpus_name or corpus.repo_id.split("/")[-1]).lower()
         for source_language, target_language in corpus.languages.items():
             language = target_language or source_language
             short_language = language.removesuffix("_ng")
