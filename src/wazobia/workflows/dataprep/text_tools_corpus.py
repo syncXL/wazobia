@@ -30,6 +30,7 @@ class TextProcessor:
         processed_transcriptions = []
         iso_lang = self.lang_mapping[self.lang]
         for text in transcriptions:
+            text = "" if text is None else str(text)
             if self.homophones:
                 text = self.homophones(text)
             if self.pattern:
