@@ -28,21 +28,6 @@ corpora:
       columns:
         - text: transcript
       normalize: fon
-  
-  - fongbe-hausa: #untoned, unstructured
-      corpus_name: fon_hau
-      repo_id: Professor/fongbe-hausa-asr-dataset
-      include_lang_as_arg: False
-      ingest_strategy: base
-      splits:
-        - train: train
-      languages:
-        - fon: fon
-      columns:
-        - transcription: transcript
-      normalize: fon
-      compile_text: False
-
   - waxal-nlp:
       repo_id: google/WaxalNLP
       include_lang_as_arg: True
