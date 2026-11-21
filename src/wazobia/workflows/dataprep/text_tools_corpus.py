@@ -20,6 +20,7 @@ class TextProcessor:
             "pcm_ng" : "pcm",
             "eng_ng" : "eng",
             "fon" : "fon",
+            "ewe" : "ewe",
         }
         self.remove_numbers = remove_numbers
         self.normalizer = normalizer
@@ -42,6 +43,8 @@ class TextProcessor:
             if self.normalizer in {"fon", "fongbe_syllabify"}:
                 processed_text = syllabify(text)
             elif iso_lang == "fon":
+                processed_text = text_tools.text_normalize(text, "*", remove_numbers=self.remove_numbers)
+            elif iso_lang not in text_tools.ALLOWED:
                 processed_text = text_tools.text_normalize(text, "*", remove_numbers=self.remove_numbers)
             else:
                 processed_text = text_tools.wazobia_normalize(text, iso_lang, self.remove_numbers)
