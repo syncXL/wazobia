@@ -78,7 +78,7 @@ corpora:
       splits:
         - train: train
       languages:
-        - ewe_ewe: Ewe_ewe
+        - Ewe_ewe: ewe
       columns:
         - text: transcript
       exclude_cols: None
