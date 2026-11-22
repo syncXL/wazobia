@@ -53,8 +53,8 @@ def _compile_manifest(files: Sequence[Path], output_dir: str, corpus: str, split
     manifest.parent.mkdir(parents=True, exist_ok=True)
     with manifest.open("a", encoding="utf-8", newline="\n") as target:
         for parquet_file in sorted(files):
-            table = pq.read_table(parquet_file, columns=["transcription"])
-            for text in table.column("transcription").to_pylist():
+            table = pq.read_table(parquet_file, columns=["text"])
+            for text in table.column("text").to_pylist():
                 if text:
                     target.write(text.replace("\r", " ").replace("\n", " ") + "\n")
     return manifest
