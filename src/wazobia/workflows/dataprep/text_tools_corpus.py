@@ -4,7 +4,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from wazobia.workflows.dataprep import text_tools
-from wazobia.workflows.dataprep.syllabify import syllabify
+from wazobia.workflows.dataprep.syllabify import syllabify, tone_numbers_only
 
 
 class TextProcessor:
@@ -40,7 +40,9 @@ class TextProcessor:
             if self.pattern:
                 cleaned = self.pattern.sub("", text)
                 text = re.sub(r"\s+", " ", cleaned).strip()
-            if self.normalizer in {"fon", "fongbe_syllabify"}:
+            if self.normalizer == "fon":
+                processed_text = tone_numbers_only(text)
+            elif self.normalizer == "fongbe_syllabify":
                 processed_text = syllabify(text)
             elif iso_lang == "fon":
                 processed_text = text_tools.text_normalize(text, "*", remove_numbers=self.remove_numbers)

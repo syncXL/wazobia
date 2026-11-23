@@ -109,6 +109,48 @@ def syllabify(text: str) -> str:
                     for base, tone in syllables(text))
 
 
+def tone_numbers_only(text: str) -> str:
+    """Normalize text and mark tones with digits without adding syllable spaces."""
+    words = []
+    for word in tonal_target(text or "").split():
+        word_syllables = syllables(word)
+        words.append("".join(
+            unicodedata.normalize("NFC", base) + "".join(TONE_DIGIT[t] for t in tone)
+            for base, tone in word_syllables
+        ))
+    return " ".join(words)
+
+
+def desyllabify(text: str) -> str:
+    """Replace trailing tone digits with tone marks without changing whitespace."""
+    digit_tone = {digit: mark for mark, digit in TONE_DIGIT.items()}
+
+    def restore_token(match: re.Match[str]) -> str:
+        restored = []
+        syllable_start = 0
+        for char in unicodedata.normalize("NFD", match.group(0)):
+            tone_mark = digit_tone.get(char)
+            if tone_mark is None or not restored:
+                restored.append(char)
+                continue
+
+            tone_index = next(
+                (index for index in range(len(restored) - 1, syllable_start - 1, -1)
+                 if restored[index].lower() in VOWELS),
+                next((index for index in range(len(restored) - 1, syllable_start - 1, -1)
+                      if not unicodedata.category(restored[index]).startswith("M")), None),
+            )
+            if tone_index is None:
+                restored.append(char)
+            else:
+                restored.insert(tone_index + 1, tone_mark)
+                syllable_start = len(restored)
+
+        return unicodedata.normalize("NFC", "".join(restored))
+
+    return re.sub(r"\S+", restore_token, text)
+
+
 def _self_test() -> None:
     assert syllabify("Un nɔ́ ɖu nǔ") == "un nɔ1 ɖu nu3"
     assert syllabify("Kɔ́xojí, ɖ'é mɛ !") == syllabify("kɔ́ xo jí ɖé mɛ") == "kɔ1 xo ji1 ɖe1 mɛ"

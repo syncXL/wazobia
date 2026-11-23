@@ -22,6 +22,7 @@ from wazobia.workflows.dataprep import (
     text_tools_corpus,
     utils,
 )
+from wazobia.workflows.dataprep.syllabify import desyllabify, syllabify
 
 from . import config
 
@@ -47,7 +48,14 @@ def _unique_parquet_names(files: list[Path], shard_id: str) -> list[Path]:
     return renamed
 
 
-def _compile_manifest(files: Sequence[Path], output_dir: str, corpus: str, split: str, language: str) -> Path:
+def _compile_manifest(
+    files: Sequence[Path],
+    output_dir: str,
+    corpus: str,
+    split: str,
+    language: str,
+    normalizer: str | None = None,
+) -> Path:
     """Append normalized transcription rows from a processed shard to its split manifest."""
     manifest = Path(output_dir) / "data" / f"corpus={corpus}" / f"split={split}" / f"language={language}" / "transcript_manifest.txt"
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -56,6 +64,8 @@ def _compile_manifest(files: Sequence[Path], output_dir: str, corpus: str, split
             table = pq.read_table(parquet_file, columns=["text"])
             for text in table.column("text").to_pylist():
                 if text:
+                    if normalizer == "fon":
+                        text = syllabify(desyllabify(text))
                     target.write(text.replace("\r", " ").replace("\n", " ") + "\n")
     return manifest
 
@@ -327,7 +337,10 @@ class CorpusCompiler:
                         raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
 
                     if ds_config.compile_text is True or split in (ds_config.compile_text or []):
-                        manifest = _compile_manifest(out_files, output_dir, name, new_split, _language_partition(new_lang))
+                        manifest = _compile_manifest(
+                            out_files, output_dir, name, new_split,
+                            _language_partition(new_lang), normalizer=ds_config.normalize,
+                        )
                         failed = storage.upload([manifest], local_dir=output_dir)
                         if failed:
                             raise ValueError(f"Failed to upload transcript manifest {failed}")
@@ -410,7 +423,10 @@ class CorpusCompiler:
                 if not out_files:
                     raise RuntimeError(f"No Parquet files produced for shard {entity['filename']}")
                 if ds_config.compile_text is True or split in (ds_config.compile_text or []):
-                    manifest = _compile_manifest(out_files, output_dir, name, new_split, _language_partition(new_lang))
+                    manifest = _compile_manifest(
+                        out_files, output_dir, name, new_split,
+                        _language_partition(new_lang), normalizer=ds_config.normalize,
+                    )
                     failed = storage.upload([manifest], local_dir=output_dir)
                     if failed:
                         raise ValueError(f"Failed to upload transcript manifest {failed}")
